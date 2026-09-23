@@ -2,7 +2,13 @@ package com.ziprun.controller;
 
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
+import com.ziprun.domain.ReassignmentSuggestion;
+import com.ziprun.domain.SuggestionStatus;
+import com.ziprun.domain.TriggerReason;
 import com.ziprun.repository.OrderRepository;
+import com.ziprun.repository.ReassignmentSuggestionRepository;
+import com.ziprun.routing.RoutingService;
+import com.ziprun.routing.RoutingResult;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -25,9 +31,17 @@ import java.util.UUID;
 public class OrderController {
 
     private final OrderRepository orderRepository;
+    private final RoutingService routingService;
+    private final ReassignmentSuggestionRepository suggestionRepository;
 
-    public OrderController(OrderRepository orderRepository) {
+    public OrderController(
+            OrderRepository orderRepository,
+            RoutingService routingService,
+            ReassignmentSuggestionRepository suggestionRepository
+    ) {
         this.orderRepository = orderRepository;
+        this.routingService = routingService;
+        this.suggestionRepository = suggestionRepository;
     }
 
     @PostMapping
@@ -73,14 +87,30 @@ public class OrderController {
     }
 
     @PostMapping("/{id}/suggest")
-    public ResponseEntity<String> suggestReassignment(@PathVariable String id) {
-        // TODO: Wire routing engine here
-        // - Get order by ID
-        // - Get available agents
-        // - Call active routing strategy
-        // - Persist ReassignmentSuggestion
-        // - Return suggestion
-        return ResponseEntity.ok("{}");
+    public ResponseEntity<?> suggestReassignment(@PathVariable String id) {
+        return orderRepository.findById(id)
+                .map(order -> {
+                    RoutingResult result = routingService.route(order);
+
+                    if (result.getRecommendedAgentId() == null) {
+                        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                                .body(new ErrorResponse("No available agents for reassignment"));
+                    }
+
+                    ReassignmentSuggestion suggestion = new ReassignmentSuggestion();
+                    suggestion.setId("SUGG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+                    suggestion.setOrderId(order.getId());
+                    suggestion.setRecommendedAgentId(result.getRecommendedAgentId());
+                    suggestion.setConfidence(result.getConfidence());
+                    suggestion.setReasoning(result.getReasoning());
+                    suggestion.setStatus(SuggestionStatus.PENDING);
+                    suggestion.setTriggerReason(TriggerReason.INITIAL);
+                    suggestion.setCreatedAt(LocalDateTime.now());
+
+                    ReassignmentSuggestion saved = suggestionRepository.save(suggestion);
+                    return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+                })
+                .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @PatchMapping("/{id}/status")
@@ -132,6 +162,22 @@ public class OrderController {
 
         public void setStatus(String status) {
             this.status = status;
+        }
+    }
+
+    public static class ErrorResponse {
+        private String message;
+
+        public ErrorResponse(String message) {
+            this.message = message;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+
+        public void setMessage(String message) {
+            this.message = message;
         }
     }
 }

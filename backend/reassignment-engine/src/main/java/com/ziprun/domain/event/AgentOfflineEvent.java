@@ -1,6 +1,5 @@
 package com.ziprun.domain.event;
 
-import lombok.Getter;
 import org.springframework.context.ApplicationEvent;
 
 /**
@@ -11,7 +10,6 @@ import org.springframework.context.ApplicationEvent;
  * This decouples the agent status update from the re-planning logic,
  * allowing both to evolve independently (follows principle in ADR-4)
  */
-@Getter
 public class AgentOfflineEvent extends ApplicationEvent {
     private final String agentId;
     private final String agentName;
@@ -20,5 +18,13 @@ public class AgentOfflineEvent extends ApplicationEvent {
         super(source);
         this.agentId = agentId;
         this.agentName = agentName;
+    }
+
+    public String getAgentId() {
+        return agentId;
+    }
+
+    public String getAgentName() {
+        return agentName;
     }
 }
