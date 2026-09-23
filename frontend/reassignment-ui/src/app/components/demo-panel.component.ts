@@ -73,17 +73,6 @@ import { AgentFilterPipe } from '../pipes/agent-filter.pipe';
       </div>
 
       <div class="control-section">
-        <h4>3️⃣ Polling & Refresh</h4>
-        <button (click)="enableAutoRefresh()" class="btn-primary">
-          {{ autoRefreshEnabled ? '⏸️ Stop Auto-Refresh' : '▶️ Start Auto-Refresh (2s)' }}
-        </button>
-        <button (click)="refreshNow()" class="btn-secondary">🔄 Refresh Now</button>
-        @if (autoRefreshEnabled) {
-          <div class="info-msg">Auto-refreshing every 2 seconds...</div>
-        }
-      </div>
-
-      <div class="control-section">
         <h4>📊 Current State</h4>
         <div class="state-info">
           <p><strong>Total Agents:</strong> {{ agents.length }}</p>
@@ -298,8 +287,6 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
   orderCreated = false;
   createdOrderId = '';
   agentStatusChanged = false;
-  autoRefreshEnabled = false;
-  refreshInterval: any;
 
   constructor(private apiService: ApiService, private refreshService: RefreshService) {}
 
@@ -355,24 +342,11 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
     });
   }
 
-  enableAutoRefresh() {
-    if (this.autoRefreshEnabled) {
-      clearInterval(this.refreshInterval);
-      this.autoRefreshEnabled = false;
-    } else {
-      this.autoRefreshEnabled = true;
-      this.refreshInterval = setInterval(() => this.refreshNow(), 2000);
-    }
-  }
-
   refreshNow() {
     this.loadAgents();
     this.refreshService.triggerRefresh();
   }
 
   ngOnDestroy() {
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
-    }
   }
 }
