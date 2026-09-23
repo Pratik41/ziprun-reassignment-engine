@@ -22,39 +22,47 @@ public class PromptBuilder {
             """
             You are an AI assignment engine for a delivery platform.
 
-            TASK: Recommend the best available agent for THIS SPECIFIC order.
+            TASK: Assign THIS SPECIFIC order to the best available agent.
 
             ORDER DETAILS:
-            - ID: %s
-            - Description/Type: %s
-            - Status: NEW (needs assignment)
+            - Order ID: %s
+            - Description: %s
+            - Priority: NORMAL
 
             AVAILABLE AGENTS (with current workload):
             %s
 
-            INSTRUCTIONS:
-            1. Analyze each agent's current workload (active orders count)
-            2. For order '%s' with description '%s', pick the BEST SUITED agent
-            3. Explain WHY this agent is good for THIS ORDER specifically (not generic)
-            4. Return your recommendation in JSON format
+            *** CRITICAL: UNIQUE REASONING FOR EACH ORDER ***
+            For order %s (%s) specifically:
+            1. Which agent can handle this best?
+            2. What is their current load?
+            3. Why them over others?
+            4. Any trade-offs?
 
-            REASONING MUST BE SPECIFIC TO THIS ORDER ('%s'):
-            - Which agent is best and why?
-            - How does this agent's current load affect the decision?
-            - Why is this agent better than others for this particular order type ('%s')?
+            REASONING FORMAT (MUST be UNIQUE per order - not template text):
+            Format: "For %s (%s): [Agent Name] has [load details]. Better than [other agent] because [reason]. Trade-off: [explanation]."
+
+            Example of GOOD unique reasoning:
+            "For ORD-456 (Electronics): Vikram has 2 active orders (lowest). Better than Raj (4) or Amit (6) because lowest load. Trade-off: none available."
+
+            Example of BAD generic reasoning (DO NOT DO THIS):
+            "Assigned because agent has low load and other agents available."
 
             RESPONSE FORMAT (must be valid JSON):
             {
               "agent_id": "AGT-XXXX",
               "confidence": 0.85,
-              "reasoning": "For %s: [specific explanation for this order]"
+              "reasoning": "For %s (%s): [Agent Name] has X active orders. Chosen over [other agents] because [specific reason for THIS order]."
             }
 
-            CONSTRAINTS:
-            - agent_id must match one of the agent IDs listed above (no hallucination)
-            - confidence must be a number between 0.0 and 1.0
-            - reasoning MUST include the order ID (%s) and be SPECIFIC to this order, not generic
-            - reasoning must be brief (1-2 sentences) and suitable for ops to read
+            CRITICAL RULES:
+            - reasoning MUST START with "For %s"
+            - reasoning MUST include ORDER ID (%s)
+            - reasoning MUST include ORDER DESCRIPTION (%s)
+            - reasoning MUST compare with at least 1 other agent by name
+            - reasoning MUST mention load/capacity numbers
+            - reasoning MUST be DIFFERENT for each order (not copy-paste)
+            - DO NOT use generic/template text
 
             Return ONLY the JSON response, no other text.
             """,
@@ -66,7 +74,9 @@ public class PromptBuilder {
             order.getId(),
             order.getDescription(),
             order.getId(),
-            order.getId()
+            order.getDescription(),
+            order.getId(),
+            order.getDescription()
         );
     }
 
@@ -82,43 +92,44 @@ public class PromptBuilder {
             ALERT: Agent offline. Recovery routing in progress.
 
             SITUATION:
-            - Agent '%s' (ID: %s) has gone OFFLINE
-            - %d orders are now stranded and need reassignment
-            - This is a recovery situation, not a normal assignment
+            - Offline Agent: '%s' (ID: %s)
+            - Total Stranded Orders: %d
+            - THIS IS ORDER: %s (Description: %s)
 
-            AFFECTED ORDER (one of the stranded):
-            - ID: %s
-            - Description/Type: %s
-            - Urgency: HIGH (customer expecting delivery from offline agent)
-            - Current State: REASSIGNMENT_PENDING
-
-            AVAILABLE AGENTS (for reassignment - rank by current workload):
+            AVAILABLE AGENTS FOR REASSIGNMENT:
             %s
 
-            INSTRUCTIONS:
-            You are in RECOVERY MODE. This is NOT a normal assignment:
-            1. The original agent '%s' failed. Previous assignments to them are void.
-            2. Order '%s' with description '%s' must be moved to a healthy agent immediately.
-            3. Analyze each available agent's current load.
-            4. Choose the agent BEST SUITED for THIS SPECIFIC ORDER based on their current capacity.
-            5. Be pragmatic: good-enough is better than perfect when recovering.
+            *** CRITICAL: UNIQUE REASONING FOR EACH ORDER ***
+            For order %s specifically (not generic):
+            1. Which agent is best?
+            2. What is their current load?
+            3. Why them over others?
+            4. Trade-offs considered?
 
-            REASONING MUST BE SPECIFIC TO THIS ORDER ('%s'):
-            - Which agent did you pick and why?
-            - How does this agent's current load factor into your decision?
-            - Why is this agent better than the alternatives for THIS particular order?
+            REASONING FORMAT (MUST be UNIQUE per order - not template text):
+            Format: "For %s (%s): [Agent Name] has [load details]. This is better than [name2] because [reason]. Trade-off: [explanation]."
+
+            Example of GOOD unique reasoning:
+            "For ORD-123 (Electronics): Vikram has 2 active orders (lowest). Better than Raj (4) who is offline. Trade-off: slightly less experienced but available."
+
+            Example of BAD generic reasoning (DO NOT DO THIS):
+            "Assigned because agent has low load and other agents available."
 
             RESPONSE FORMAT (must be valid JSON):
             {
               "agent_id": "AGT-XXXX",
               "confidence": 0.75,
-              "reasoning": "Recovery for %s: [specific explanation of why this agent for this order]"
+              "reasoning": "For %s (%s): [Agent Name] has X active orders. Chosen over [other agents] because [specific reason for THIS order]."
             }
 
-            CONSTRAINTS:
-            - agent_id must match one of the available agents listed above
-            - confidence: in recovery, confidence may be lower (0.5+) than normal (0.8+)
-            - reasoning MUST include the order ID (%s) and be SPECIFIC to this order, not generic
+            CRITICAL RULES:
+            - reasoning MUST START with "For %s"
+            - reasoning MUST include the ORDER ID (%s)
+            - reasoning MUST include the ORDER DESCRIPTION (%s)
+            - reasoning MUST compare with at least 1 other agent by name
+            - reasoning MUST mention load/capacity numbers
+            - reasoning MUST be DIFFERENT for each order (not copy-paste)
+            - DO NOT use generic/template text
 
             Return ONLY the JSON response, no other text.
             """,
@@ -128,12 +139,13 @@ public class PromptBuilder {
             order.getId(),
             order.getDescription(),
             formatAgentRoster(availableAgents),
-            failedAgentName,
+            order.getId(),
+            order.getId(),
             order.getId(),
             order.getDescription(),
             order.getId(),
             order.getId(),
-            order.getId()
+            order.getDescription()
         );
     }
 
