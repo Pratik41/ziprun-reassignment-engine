@@ -103,4 +103,10 @@ public class AgentServiceImpl implements AgentService {
 
         log.debug("Agent order count decremented: id={}, newCount={}", agentId, newCount);
     }
+
+    @Override
+    public Agent save(Agent agent) {
+        log.debug("Saving agent: id={}, name={}", agent.getId(), agent.getName());
+        return agentRepository.save(agent);
+    }
 }

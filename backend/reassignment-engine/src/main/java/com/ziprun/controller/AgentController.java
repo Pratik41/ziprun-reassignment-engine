@@ -39,6 +39,32 @@ public class AgentController {
     }
 
     /**
+     * POST /agents - Create a new agent.
+     *
+     * Request: { "id": "AGT-001", "name": "Agent Name" }
+     * Response: 200 OK + created agent
+     */
+    @PostMapping
+    public ResponseEntity<?> createAgent(@RequestBody CreateAgentRequest request) {
+        log.debug("POST /agents: id={}, name={}", request.getId(), request.getName());
+
+        if (request.getId() == null || request.getId().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("Agent ID is required"));
+        }
+        if (request.getName() == null || request.getName().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("Agent name is required"));
+        }
+
+        Agent agent = new Agent();
+        agent.setId(request.getId());
+        agent.setName(request.getName());
+        agent.setStatus(AgentStatus.AVAILABLE);
+        agent.setActiveOrderCount(0);
+
+        return ResponseEntity.ok(agentService.save(agent));
+    }
+
+    /**
      * GET /agents - List all agents.
      *
      * Response: 200 OK + list of agents
@@ -120,6 +146,17 @@ public class AgentController {
     }
 
     // ============ DTOs ============
+
+    public static class CreateAgentRequest {
+        private String id;
+        private String name;
+
+        public String getId() { return id; }
+        public void setId(String id) { this.id = id; }
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+    }
 
     public static class UpdateAgentStatusRequest {
         private String status;

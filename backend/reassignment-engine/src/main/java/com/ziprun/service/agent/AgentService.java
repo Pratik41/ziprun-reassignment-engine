@@ -70,4 +70,12 @@ public interface AgentService {
      * @throws IllegalArgumentException if agent not found
      */
     void decrementOrderCount(String agentId);
+
+    /**
+     * Save a new agent.
+     *
+     * @param agent agent to save
+     * @return saved agent
+     */
+    Agent save(Agent agent);
 }
