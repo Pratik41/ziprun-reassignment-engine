@@ -433,23 +433,28 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     this.loading = true;
     this.error = null;
 
-    // Load ONLY REASSIGNMENT_PENDING orders (as per problem statement T-5)
+    // Load REASSIGNMENT_PENDING orders (auto-replan orders)
     this.apiService.getOrdersByStatus('REASSIGNMENT_PENDING').subscribe({
-      next: (orders) => {
-        // Load all suggestions and attach to orders
+      next: (reassignOrders) => {
+        // Load all suggestions
         this.apiService.getSuggestions().subscribe({
           next: (suggestions) => {
             // Link suggestions to their orders by orderId
-            orders.forEach(order => {
+            reassignOrders.forEach(order => {
               order.suggestions = suggestions.filter(s => s.orderId === order.id);
             });
-            this.orders = orders;
+
+            // Show ONLY orders that have AGENT_OFFLINE suggestions (agentic loop)
+            const autoRePlanOrders = reassignOrders.filter(order =>
+              order.suggestions && order.suggestions.some((s: any) => s.triggerReason === 'AGENT_OFFLINE')
+            );
+
+            this.orders = autoRePlanOrders;
             this.loading = false;
-            this.error = null; // Clear any previous errors
+            this.error = null;
           },
           error: () => {
-            // If suggestions fail, still show orders with empty suggestions
-            this.orders = orders.map(o => ({ ...o, suggestions: [] }));
+            this.orders = reassignOrders.map(o => ({ ...o, suggestions: [] }));
             this.loading = false;
           }
         });
