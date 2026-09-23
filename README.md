@@ -1,6 +1,6 @@
 # ZipRun AI Reassignment Engine
 
-A 5-hour hackathon project: An agentic, AI-powered order reassignment system for delivery fleets. When a delivery agent goes offline mid-shift, the system automatically detects it, identifies affected orders, uses AI to recommend reassignments, and presents suggestions to ops for approval.
+An agentic, AI-powered order reassignment system for delivery fleets. When a delivery agent goes offline mid-shift, the system automatically detects it, identifies affected orders, uses AI to recommend reassignments, and presents suggestions to ops for approval.
 
 **Problem:** Manual spreadsheet reassignment is slow, error-prone, depends on one person, fails silently.  
 **Solution:** Event-driven system that observes, reasons, acts, and checkpoints with human approval.
