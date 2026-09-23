@@ -38,6 +38,10 @@ export class ApiService {
     });
   }
 
+  getSuggestions(): Observable<any[]> {
+    return this.http.get<any[]>(`${this.apiUrl}/suggestions`);
+  }
+
   getAgents(): Observable<any[]> {
     return this.http.get<any[]>(`${this.apiUrl}/agents`);
   }

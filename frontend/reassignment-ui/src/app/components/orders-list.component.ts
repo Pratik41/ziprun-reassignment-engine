@@ -315,14 +315,26 @@ export class OrdersListComponent implements OnInit {
   loadOrders() {
     this.loading = true;
     this.error = null;
-    // Load ALL orders (both ASSIGNED and REASSIGNMENT_PENDING)
-    this.apiService.getOrders().subscribe({
+
+    // Load ONLY REASSIGNMENT_PENDING orders (as per problem statement T-5)
+    this.apiService.getOrdersByStatus('REASSIGNMENT_PENDING').subscribe({
       next: (orders) => {
-        // Show both ASSIGNED (waiting for suggestion) and REASSIGNMENT_PENDING (have suggestion)
-        this.orders = orders.filter(o =>
-          o.status === 'ASSIGNED' || o.status === 'REASSIGNMENT_PENDING'
-        );
-        this.loading = false;
+        // Load all suggestions and attach to orders
+        this.apiService.getSuggestions().subscribe({
+          next: (suggestions) => {
+            // Link suggestions to their orders by orderId
+            orders.forEach(order => {
+              order.suggestions = suggestions.filter(s => s.orderId === order.id);
+            });
+            this.orders = orders;
+            this.loading = false;
+          },
+          error: () => {
+            // If suggestions fail, still show orders with empty suggestions
+            this.orders = orders.map(o => ({ ...o, suggestions: [] }));
+            this.loading = false;
+          }
+        });
       },
       error: (err) => {
         this.error = 'Failed to load orders';
