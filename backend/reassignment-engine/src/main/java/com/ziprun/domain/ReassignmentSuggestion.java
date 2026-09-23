@@ -24,12 +24,8 @@ public class ReassignmentSuggestion {
     @Id
     private String id;
 
-    @Column(nullable = false)
+    @Column(name = "order_id", nullable = false)
     private String orderId;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_id", insertable = false, updatable = false)
-    private Order order;
 
     @Column(nullable = false)
     private String recommendedAgentId;
@@ -89,9 +85,6 @@ public class ReassignmentSuggestion {
 
     public String getOrderId() { return orderId; }
     public void setOrderId(String orderId) { this.orderId = orderId; }
-
-    public Order getOrder() { return order; }
-    public void setOrder(Order order) { this.order = order; }
 
     public String getRecommendedAgentId() { return recommendedAgentId; }
     public void setRecommendedAgentId(String recommendedAgentId) { this.recommendedAgentId = recommendedAgentId; }
