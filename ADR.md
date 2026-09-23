@@ -167,20 +167,21 @@ The ops interface needs to display reassignment suggestions, accept/reject contr
 
 **Options considered**
 1. *React 18 + Vite* - Lighter, faster dev server, simpler mental model, large ecosystem
-2. *Angular 17 + standalone API* - More opinionated structure, built-in patterns, better for large teams
+2. *Angular 17 + standalone API* - More opinionated structure, built-in patterns, better for teams with Spring Boot expertise
 
 **Decision**  
-Chose React 18 + Vite. Reasons:
-- Faster iteration (dev server startup in ms, not seconds)
-- Smaller learning curve for solo hackathon
-- Vite's HMR (hot module reloading) excellent for UI tweaking
-- Hooks-based state management easier to trace than Angular's dependency injection
+Chose Angular 17 + standalone API. Reasons:
+- Aligns with deep Spring Boot expertise (similar dependency injection patterns)
+- Strong typing (TypeScript) pairs well with strict backend design
+- RxJS observables map naturally to async event streams (like Spring events)
+- Built-in HTTP client, forms, routing reduce boilerplate
+- Standalone API removes module boilerplate, faster iteration than older Angular
 
 **Tradeoffs accepted**  
-- No built-in form validation (need to add or use library)
-- Fewer conventions (more decisions to make on file structure)
-- Smaller default framework (more choice of libraries needed)
-- Benefit: Faster to prototype and iterate on UI
+- Heavier framework than React (more initial bundle size, but better for larger apps)
+- Steeper learning curve for non-Angular devs (mitigated by solo context)
+- Requires TypeScript (stricter, but better for catching bugs)
+- Benefit: Strong alignment with backend architectural patterns, robust CLI tooling, less "decision fatigue" on framework setup
 
 ---
 
