@@ -99,37 +99,42 @@ public class PromptBuilder {
             AVAILABLE AGENTS FOR REASSIGNMENT:
             %s
 
-            *** CRITICAL: UNIQUE REASONING FOR EACH ORDER ***
-            For order %s specifically (not generic):
-            1. Which agent is best?
-            2. What is their current load?
-            3. Why them over others?
-            4. Trade-offs considered?
+            *** PROVIDE TOP 3 RECOMMENDATIONS (not just one) ***
+            For order %s (%s), rank the TOP 3 best agents:
+            1. Best choice and why
+            2. Second best (alternative)
+            3. Third best (backup)
 
-            REASONING FORMAT (MUST be UNIQUE per order - not template text):
-            Format: "For %s (%s): [Agent Name] has [load details]. This is better than [name2] because [reason]. Trade-off: [explanation]."
+            Each must include: agent name, load, unique reasoning.
 
-            Example of GOOD unique reasoning:
-            "For ORD-123 (Electronics): Vikram has 2 active orders (lowest). Better than Raj (4) who is offline. Trade-off: slightly less experienced but available."
-
-            Example of BAD generic reasoning (DO NOT DO THIS):
-            "Assigned because agent has low load and other agents available."
-
-            RESPONSE FORMAT (must be valid JSON):
+            RESPONSE FORMAT (must be valid JSON with 3 recommendations):
             {
-              "agent_id": "AGT-XXXX",
-              "confidence": 0.75,
-              "reasoning": "For %s (%s): [Agent Name] has X active orders. Chosen over [other agents] because [specific reason for THIS order]."
+              "recommendations": [
+                {
+                  "agent_id": "AGT-A",
+                  "confidence": 0.92,
+                  "reasoning": "For %s (%s): [Name] has X orders. Best because [specific reason]."
+                },
+                {
+                  "agent_id": "AGT-B",
+                  "confidence": 0.85,
+                  "reasoning": "For %s (%s): [Name] has Y orders. Second because [specific reason]."
+                },
+                {
+                  "agent_id": "AGT-C",
+                  "confidence": 0.78,
+                  "reasoning": "For %s (%s): [Name] has Z orders. Third because [specific reason]."
+                }
+              ]
             }
 
             CRITICAL RULES:
-            - reasoning MUST START with "For %s"
-            - reasoning MUST include the ORDER ID (%s)
-            - reasoning MUST include the ORDER DESCRIPTION (%s)
-            - reasoning MUST compare with at least 1 other agent by name
-            - reasoning MUST mention load/capacity numbers
-            - reasoning MUST be DIFFERENT for each order (not copy-paste)
+            - Provide EXACTLY 3 different agents (top 3 options)
+            - Each reasoning MUST mention load numbers
+            - Each reasoning MUST be UNIQUE and explain WHY different from others
+            - Confidence: 0.92 → 0.85 → 0.78
             - DO NOT use generic/template text
+            - Each should start with "For %s"
 
             Return ONLY the JSON response, no other text.
             """,
