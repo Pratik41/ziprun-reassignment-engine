@@ -2,12 +2,13 @@ import { Component } from '@angular/core';
 import { RouterOutlet } from '@angular/router';
 import { AgentRosterComponent } from './components/agent-roster.component';
 import { OrdersListComponent } from './components/orders-list.component';
+import { OrdersByAgentComponent } from './components/orders-by-agent.component';
 import { DemoPanelComponent } from './components/demo-panel.component';
 
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet, AgentRosterComponent, OrdersListComponent, DemoPanelComponent],
+  imports: [RouterOutlet, AgentRosterComponent, OrdersListComponent, OrdersByAgentComponent, DemoPanelComponent],
   templateUrl: './app.component.html',
   styleUrl: './app.component.css'
 })

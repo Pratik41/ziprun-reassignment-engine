@@ -2,6 +2,7 @@ import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
+import { RefreshService } from '../services/refresh.service';
 import { AgentFilterPipe } from '../pipes/agent-filter.pipe';
 
 @Component({
@@ -290,7 +291,7 @@ import { AgentFilterPipe } from '../pipes/agent-filter.pipe';
     }
   `]
 })
-export class DemoPanelComponent implements OnInit {
+export class DemoPanelComponent implements OnInit, OnDestroy {
   agents: any[] = [];
   orderDesc = '';
   selectedAgent = '';
@@ -300,7 +301,7 @@ export class DemoPanelComponent implements OnInit {
   autoRefreshEnabled = false;
   refreshInterval: any;
 
-  constructor(private apiService: ApiService) {}
+  constructor(private apiService: ApiService, private refreshService: RefreshService) {}
 
   ngOnInit() {
     this.loadAgents();
@@ -366,6 +367,7 @@ export class DemoPanelComponent implements OnInit {
 
   refreshNow() {
     this.loadAgents();
+    this.refreshService.triggerRefresh();
   }
 
   ngOnDestroy() {

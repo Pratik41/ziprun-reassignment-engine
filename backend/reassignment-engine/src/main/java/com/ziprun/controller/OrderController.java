@@ -217,6 +217,56 @@ public class OrderController {
         }
     }
 
+    /**
+     * POST /orders/{id}/reassign - Manual reassignment by ops.
+     * Operator can override AI suggestion and pick any agent.
+     *
+     * Request: { "newAgentId": "AGT-002" }
+     * Response: 200 OK + updated order, or 400/404
+     */
+    @PostMapping("/{id}/reassign")
+    public ResponseEntity<?> manualReassign(
+            @PathVariable String id,
+            @RequestBody ManualReassignRequest request
+    ) {
+        log.debug("POST /orders/{}/reassign: newAgentId={}", id, request.getNewAgentId());
+
+        if (request.getNewAgentId() == null || request.getNewAgentId().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("New agent ID is required"));
+        }
+
+        try {
+            Order order = orderService.findById(id)
+                    .orElseGet(() -> {
+                        log.warn("Order not found for reassignment: {}", id);
+                        return null;
+                    });
+
+            if (order == null) {
+                return ResponseEntity.notFound().build();
+            }
+
+            // Update order with new agent and mark as REASSIGNED
+            String oldAgent = order.getAssignedAgentId();
+            Order updated = orderService.reassignToAgent(id, request.getNewAgentId());
+
+            log.info(
+                "Order manually reassigned: orderId={}, oldAgent={}, newAgent={}, status={}",
+                id,
+                oldAgent,
+                request.getNewAgentId(),
+                OrderStatus.REASSIGNED
+            );
+
+            return ResponseEntity.ok(updated);
+
+        } catch (Exception e) {
+            log.error("Failed to reassign order {}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ErrorResponse("Failed to reassign order"));
+        }
+    }
+
     // ============ DTOs ============
 
     public static class CreateOrderRequest {
@@ -235,6 +285,13 @@ public class OrderController {
 
         public String getStatus() { return status; }
         public void setStatus(String status) { this.status = status; }
+    }
+
+    public static class ManualReassignRequest {
+        private String newAgentId;
+
+        public String getNewAgentId() { return newAgentId; }
+        public void setNewAgentId(String newAgentId) { this.newAgentId = newAgentId; }
     }
 
     public static class ErrorResponse {

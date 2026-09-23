@@ -68,4 +68,15 @@ public interface OrderService {
      * @return all orders currently assigned to this agent
      */
     List<Order> findByAssignedAgentId(String agentId);
+
+    /**
+     * Manually reassign an order to a different agent.
+     * Used by ops when they override AI suggestion.
+     *
+     * @param orderId order to reassign
+     * @param newAgentId new agent ID
+     * @return updated order with REASSIGNED status
+     * @throws IllegalArgumentException if order not found
+     */
+    Order reassignToAgent(String orderId, String newAgentId);
 }

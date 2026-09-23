@@ -51,4 +51,10 @@ export class ApiService {
       status
     });
   }
+
+  manualReassign(orderId: string, newAgentId: string): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/reassign`, {
+      newAgentId
+    });
+  }
 }

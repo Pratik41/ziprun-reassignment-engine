@@ -73,7 +73,7 @@ public class LLMGateway implements LLMProvider {
      * Call Google Gemini API.
      */
     private String callGemini(String prompt) {
-        String url = baseUrl + "/v1beta/models/" + model + ":generateContent?key=" + apiKey;
+        String url = baseUrl + "/" + model + ":generateContent?key=" + apiKey;
 
         Map<String, Object> body = Map.of(
             "contents", List.of(

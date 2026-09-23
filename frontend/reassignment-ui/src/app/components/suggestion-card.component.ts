@@ -42,8 +42,14 @@ import { CommonModule } from '@angular/common';
         </div>
 
         <div class="actions">
-          <button (click)="onAccept()" class="btn btn-accept">✓ Accept</button>
-          <button (click)="onReject()" class="btn btn-reject">✗ Reject</button>
+          @if (suggestion.status === 'PENDING') {
+            <button (click)="onAccept()" class="btn btn-accept">✓ Accept</button>
+            <button (click)="onReject()" class="btn btn-reject">✗ Reject</button>
+          } @else {
+            <span class="status-badge" [ngClass]="'status-' + suggestion.status.toLowerCase()">
+              {{ suggestion.status }}
+            </span>
+          }
         </div>
       </div>
     </div>
@@ -231,6 +237,33 @@ import { CommonModule } from '@angular/common';
       background-color: #da190b;
       transform: translateY(-2px);
       box-shadow: 0 4px 8px rgba(244, 67, 54, 0.3);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .status-badge {
+      display: inline-block;
+      padding: 8px 16px;
+      border-radius: 4px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .status-accepted {
+      background: linear-gradient(135deg, #d4edda, #c3e6cb);
+      color: #155724;
+      border-left: 3px solid #28a745;
+    }
+
+    .status-rejected {
+      background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+      color: #721c24;
+      border-left: 3px solid #dc3545;
     }
   `]
 })

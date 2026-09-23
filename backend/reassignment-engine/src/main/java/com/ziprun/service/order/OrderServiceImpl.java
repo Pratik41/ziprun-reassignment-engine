@@ -69,9 +69,17 @@ public class OrderServiceImpl implements OrderService {
         order.setStatus(OrderStatus.ASSIGNED);
         order.setCreatedAt(LocalDateTime.now());
 
-        // Persist
+        // Persist order
         Order saved = orderRepository.save(order);
-        log.info("Order created: id={}, agent={}", saved.getId(), assignedAgentId);
+
+        // Update agent's active order count (fetch fresh to avoid stale data)
+        Agent agentToUpdate = agentRepository.findById(assignedAgentId)
+            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + assignedAgentId));
+        agentToUpdate.setActiveOrderCount(agentToUpdate.getActiveOrderCount() + 1);
+        agentRepository.save(agentToUpdate);
+
+        log.info("Order created: id={}, agent={}, activeOrders={}",
+            saved.getId(), assignedAgentId, agentToUpdate.getActiveOrderCount());
 
         return saved;
     }
@@ -103,6 +111,18 @@ public class OrderServiceImpl implements OrderService {
 
         // Validate state transition
         validateStatusTransition(order.getStatus(), newStatus);
+
+        // Update agent's active order count when order is reassigned or delivered
+        if ((order.getStatus() == OrderStatus.ASSIGNED || order.getStatus() == OrderStatus.REASSIGNMENT_PENDING)
+            && (newStatus == OrderStatus.REASSIGNED || newStatus == OrderStatus.DELIVERED)) {
+            Agent agent = agentRepository.findById(order.getAssignedAgentId())
+                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + order.getAssignedAgentId()));
+
+            agent.setActiveOrderCount(Math.max(0, agent.getActiveOrderCount() - 1));
+            agentRepository.save(agent);
+
+            log.debug("Agent {} order count decremented to {}", order.getAssignedAgentId(), agent.getActiveOrderCount());
+        }
 
         // Update
         order.setStatus(newStatus);
@@ -137,5 +157,19 @@ public class OrderServiceImpl implements OrderService {
                 String.format("Invalid status transition: %s → %s", current, next)
             );
         }
+    }
+
+    @Override
+    @Transactional
+    public Order reassignToAgent(String orderId, String newAgentId) {
+        Order order = orderRepository.findById(orderId)
+            .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+
+        order.setAssignedAgentId(newAgentId);
+        order.setStatus(OrderStatus.REASSIGNED);
+        Order updated = orderRepository.save(order);
+
+        log.info("Order reassigned manually: orderId={}, newAgentId={}", orderId, newAgentId);
+        return updated;
     }
 }

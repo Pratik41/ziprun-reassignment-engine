@@ -94,7 +94,7 @@ public class ReplanEventHandler {
      * Process a single stranded order:
      * 1. Transition order to REASSIGNMENT_PENDING
      * 2. Check if suggestion already exists (idempotency)
-     * 3. Call routing strategy
+     * 3. Call routing strategy with recovery context (different prompts for AI)
      * 4. Create and persist suggestion
      */
     private void processSingleOrder(Order order, String offlineAgentId, String offlineAgentName) {
@@ -120,8 +120,17 @@ public class ReplanEventHandler {
             return;
         }
 
-        // Step 3: Get routing recommendation
-        RoutingResult routingResult = routingService.route(updated);
+        // Step 3: Get routing recommendation WITH recovery context
+        // This ensures AI strategy uses re-plan prompt (recovery mode) instead of initial assignment prompt
+        List<Order> allStrandedOrders = orderRepository.findByAssignedAgentIdAndStatus(offlineAgentId, OrderStatus.REASSIGNMENT_PENDING);
+        int strandedOrderCount = allStrandedOrders.size();
+
+        RoutingResult routingResult = routingService.routeWithRecoveryContext(
+            updated,
+            offlineAgentId,
+            offlineAgentName,
+            strandedOrderCount
+        );
         log.debug("Routing result for order {}: agent={}, confidence={}", orderId, routingResult.getRecommendedAgentId(), routingResult.getConfidence());
 
         // Step 4: Create suggestion with AGENT_OFFLINE trigger

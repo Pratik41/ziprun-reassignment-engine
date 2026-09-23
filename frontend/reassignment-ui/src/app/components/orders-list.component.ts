@@ -1,12 +1,15 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
+import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
+import { RefreshService } from '../services/refresh.service';
 import { SuggestionCardComponent } from './suggestion-card.component';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-orders-list',
   standalone: true,
-  imports: [CommonModule, SuggestionCardComponent],
+  imports: [CommonModule, FormsModule, SuggestionCardComponent],
   template: `
     <div class="orders-container">
       <div class="container-header">
@@ -54,12 +57,35 @@ import { SuggestionCardComponent } from './suggestion-card.component';
                     <div class="no-sugg-text">
                       <h4>Order {{ order.id }}</h4>
                       <p>{{ order.description }}</p>
-                      <small>No suggestions available</small>
+                      <small>No AI suggestions yet</small>
                     </div>
-                    <button (click)="requestSuggestion(order.id)" class="btn-suggest">
-                      Get AI Suggestion →
-                    </button>
+                    <div style="display: flex; gap: 8px;">
+                      <button (click)="requestSuggestion(order.id)" class="btn-suggest">
+                        Get AI Suggestion
+                      </button>
+                      <button (click)="toggleReassignMode(order.id)" class="btn-manual">
+                        🔄 Reassign
+                      </button>
+                    </div>
                   </div>
+
+                  @if (reassigningOrderId === order.id) {
+                    <div class="reassign-panel">
+                      <label>Select new agent:</label>
+                      <select [(ngModel)]="selectedAgentForReassign[order.id]" class="agent-select">
+                        <option value="">-- Choose Agent --</option>
+                        @for (agent of agents; track agent.id) {
+                          <option [value]="agent.id">{{ agent.name }} ({{ agent.status }})</option>
+                        }
+                      </select>
+                      <button (click)="submitReassign(order.id)" class="btn-confirm">
+                        ✓ Confirm
+                      </button>
+                      <button (click)="toggleReassignMode(null)" class="btn-cancel">
+                        ✕ Cancel
+                      </button>
+                    </div>
+                  }
                 </div>
               }
             </div>
@@ -299,17 +325,108 @@ import { SuggestionCardComponent } from './suggestion-card.component';
       transform: translateY(-2px);
       box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
     }
+
+    .btn-manual {
+      padding: 10px 18px;
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.85rem;
+      transition: all 0.3s ease;
+      white-space: nowrap;
+      box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+    }
+
+    .btn-manual:hover {
+      background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    }
+
+    .reassign-panel {
+      background: #f0f4ff;
+      border: 2px solid #2563eb;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .reassign-panel label {
+      font-weight: 600;
+      color: #1f2937;
+      font-size: 0.9rem;
+    }
+
+    .agent-select {
+      padding: 8px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      font-size: 0.9rem;
+      background: white;
+      cursor: pointer;
+    }
+
+    .btn-confirm {
+      padding: 8px 12px;
+      background: #10b981;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    .btn-confirm:hover {
+      background: #059669;
+    }
+
+    .btn-cancel {
+      padding: 8px 12px;
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.85rem;
+    }
+
+    .btn-cancel:hover {
+      background: #dc2626;
+    }
   `]
 })
-export class OrdersListComponent implements OnInit {
+export class OrdersListComponent implements OnInit, OnDestroy {
   orders: any[] = [];
+  agents: any[] = [];
   loading = true;
   error: string | null = null;
+  reassigningOrderId: string | null = null;
+  selectedAgentForReassign: { [orderId: string]: string } = {};
+  private refreshSubscription: Subscription | null = null;
 
-  constructor(private apiService: ApiService) {}
+  constructor(private apiService: ApiService, private refreshService: RefreshService) {}
 
   ngOnInit() {
     this.loadOrders();
+    this.loadAgents();
+    // Listen for refresh events from demo panel
+    this.refreshSubscription = this.refreshService.refresh$.subscribe(() => {
+      this.loadOrders();
+    });
+  }
+
+  ngOnDestroy() {
+    if (this.refreshSubscription) {
+      this.refreshSubscription.unsubscribe();
+    }
   }
 
   loadOrders() {
@@ -328,6 +445,7 @@ export class OrdersListComponent implements OnInit {
             });
             this.orders = orders;
             this.loading = false;
+            this.error = null; // Clear any previous errors
           },
           error: () => {
             // If suggestions fail, still show orders with empty suggestions
@@ -359,23 +477,66 @@ export class OrdersListComponent implements OnInit {
   }
 
   handleAccept(suggestionId: string) {
+    this.error = null;
     this.apiService.acceptSuggestion(suggestionId).subscribe({
       next: () => {
         this.loadOrders();
       },
-      error: () => {
+      error: (err) => {
+        console.error('Accept failed:', err);
         this.error = 'Failed to accept suggestion';
       }
     });
   }
 
   handleReject(suggestionId: string) {
+    this.error = null;
     this.apiService.rejectSuggestion(suggestionId).subscribe({
       next: () => {
         this.loadOrders();
       },
-      error: () => {
+      error: (err) => {
+        console.error('Reject failed:', err);
         this.error = 'Failed to reject suggestion';
+      }
+    });
+  }
+
+  loadAgents() {
+    this.apiService.getAgents().subscribe({
+      next: (data) => {
+        this.agents = data;
+      },
+      error: (err) => {
+        console.error('Failed to load agents', err);
+      }
+    });
+  }
+
+  toggleReassignMode(orderId: string | null) {
+    this.reassigningOrderId = orderId;
+    if (orderId) {
+      this.selectedAgentForReassign[orderId] = '';
+    }
+  }
+
+  submitReassign(orderId: string) {
+    const selectedAgent = this.selectedAgentForReassign[orderId];
+
+    if (!selectedAgent) {
+      this.error = 'Please select an agent';
+      return;
+    }
+
+    this.error = null;
+    this.apiService.manualReassign(orderId, selectedAgent).subscribe({
+      next: () => {
+        this.reassigningOrderId = null;
+        this.loadOrders();
+      },
+      error: (err) => {
+        console.error('Reassign failed:', err);
+        this.error = 'Failed to reassign order';
       }
     });
   }

@@ -1,6 +1,8 @@
-import { Component, OnInit } from '@angular/core';
+import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { ApiService } from '../services/api.service';
+import { RefreshService } from '../services/refresh.service';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-agent-roster',
@@ -289,15 +291,26 @@ import { ApiService } from '../services/api.service';
     }
   `]
 })
-export class AgentRosterComponent implements OnInit {
+export class AgentRosterComponent implements OnInit, OnDestroy {
   agents: any[] = [];
   loading = true;
   error: string | null = null;
+  private refreshSubscription: Subscription | null = null;
 
-  constructor(private apiService: ApiService) {}
+  constructor(private apiService: ApiService, private refreshService: RefreshService) {}
 
   ngOnInit() {
     this.loadAgents();
+    // Listen for refresh events
+    this.refreshSubscription = this.refreshService.refresh$.subscribe(() => {
+      this.loadAgents();
+    });
+  }
+
+  ngOnDestroy() {
+    if (this.refreshSubscription) {
+      this.refreshSubscription.unsubscribe();
+    }
   }
 
   loadAgents() {
