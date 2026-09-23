@@ -27,7 +27,7 @@ import java.util.Map;
  *   llm.base-url = provider-url
  */
 @Component
-public class LLMGateway {
+public class LLMGateway implements LLMProvider {
     private static final Logger log = LoggerFactory.getLogger(LLMGateway.class);
 
     @Value("${llm.provider}")
@@ -44,6 +44,11 @@ public class LLMGateway {
 
     private final RestClient http = RestClient.create();
 
+    @Override
+    public String getName() {
+        return provider + "-llm";
+    }
+
     /**
      * Call the LLM with a prompt.
      *
@@ -52,6 +57,7 @@ public class LLMGateway {
      * @throws RestClientException if HTTP call fails
      * @throws RuntimeException if response parsing fails
      */
+    @Override
     public String callLLM(String prompt) {
         log.debug("Calling LLM via provider: {}", provider);
 
