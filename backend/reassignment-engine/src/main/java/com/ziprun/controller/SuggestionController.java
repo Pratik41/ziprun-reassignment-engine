@@ -2,94 +2,182 @@ package com.ziprun.controller;
 
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
-import com.ziprun.repository.ReassignmentSuggestionRepository;
+import com.ziprun.service.order.OrderService;
+import com.ziprun.service.suggestion.SuggestionService;
+import com.ziprun.domain.OrderStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
-import java.time.LocalDateTime;
 import java.util.List;
 
 /**
- * REST API for reassignment suggestions.
+ * Suggestion Controller: REST API for reassignment suggestions.
+ *
+ * RESPONSIBILITY: Handle HTTP concerns only
+ * - Parse request body
+ * - Validate input
+ * - Call business logic (SuggestionService, OrderService)
+ * - Format response
+ * - Return HTTP status codes
+ *
+ * DOES NOT: Query database directly, coordinate complex state changes
  *
  * Endpoints:
- * GET /suggestions - List suggestions (filterable by status)
- * GET /suggestions/{id} - Get single suggestion
- * PATCH /suggestions/{id} - Accept or reject suggestion
+ * GET    /suggestions              - List suggestions (filterable by status)
+ * GET    /suggestions/{id}         - Get single suggestion
+ * PATCH  /suggestions/{id}         - Accept or reject suggestion
  *
  * Operations:
- * - Accept: Ops approves suggested agent reassignment
- * - Reject: Ops rejects and keeps order with current agent
+ * - Accept (status=ACCEPTED): Ops approves reassignment → update order + assign new agent
+ * - Reject (status=REJECTED): Ops rejects → keep order with current agent
  */
 @RestController
 @RequestMapping("/suggestions")
 public class SuggestionController {
+    private static final Logger log = LoggerFactory.getLogger(SuggestionController.class);
 
-    private final ReassignmentSuggestionRepository suggestionRepository;
+    private final SuggestionService suggestionService;
+    private final OrderService orderService;
 
-    public SuggestionController(ReassignmentSuggestionRepository suggestionRepository) {
-        this.suggestionRepository = suggestionRepository;
+    public SuggestionController(SuggestionService suggestionService, OrderService orderService) {
+        this.suggestionService = suggestionService;
+        this.orderService = orderService;
     }
 
+    /**
+     * GET /suggestions - List all suggestions, optionally filtered by status.
+     *
+     * Query params: ?status=PENDING | ACCEPTED | REJECTED
+     * Response: 200 OK + list of suggestions
+     */
     @GetMapping
-    public ResponseEntity<List<ReassignmentSuggestion>> listSuggestions(
-            @RequestParam(name = "status", required = false) String statusStr
-    ) {
-        if (statusStr != null && !statusStr.isBlank()) {
-            try {
+    public ResponseEntity<?> listSuggestions(@RequestParam(name = "status", required = false) String statusStr) {
+        log.debug("GET /suggestions: status={}", statusStr);
+
+        try {
+            List<ReassignmentSuggestion> suggestions;
+
+            if (statusStr != null && !statusStr.isBlank()) {
                 SuggestionStatus status = SuggestionStatus.valueOf(statusStr.toUpperCase());
-                return ResponseEntity.ok(suggestionRepository.findByStatus(status));
-            } catch (IllegalArgumentException e) {
-                return ResponseEntity.badRequest().build();
+                suggestions = suggestionService.findByStatus(status);
+            } else {
+                suggestions = suggestionService.findAll();
             }
+
+            return ResponseEntity.ok(suggestions);
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid suggestion status: {}", statusStr);
+            return ResponseEntity.badRequest().body(new ErrorResponse("Invalid status: " + statusStr));
         }
-        return ResponseEntity.ok(suggestionRepository.findAll());
     }
 
+    /**
+     * GET /suggestions/{id} - Get single suggestion by ID.
+     *
+     * Response: 200 OK + suggestion details, or 404 Not Found
+     */
     @GetMapping("/{id}")
     public ResponseEntity<ReassignmentSuggestion> getSuggestion(@PathVariable String id) {
-        return suggestionRepository.findById(id)
+        log.debug("GET /suggestions/{}: id={}", id, id);
+
+        return suggestionService.findById(id)
                 .map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.notFound().build());
+                .orElseGet(() -> {
+                    log.warn("Suggestion not found: {}", id);
+                    return ResponseEntity.notFound().build();
+                });
     }
 
+    /**
+     * PATCH /suggestions/{id} - Accept or reject suggestion.
+     *
+     * When ACCEPTED:
+     * 1. Update suggestion status to ACCEPTED
+     * 2. Update order: status → REASSIGNED, assignedAgentId → recommended agent
+     *
+     * When REJECTED:
+     * 1. Update suggestion status to REJECTED
+     * 2. Order status stays as-is (not reassigned)
+     *
+     * Request: { "status": "ACCEPTED" | "REJECTED" }
+     * Response: 200 OK + updated suggestion, or 400/404
+     */
     @PatchMapping("/{id}")
-    public ResponseEntity<ReassignmentSuggestion> updateSuggestion(
+    public ResponseEntity<?> updateSuggestion(
             @PathVariable String id,
             @RequestBody UpdateSuggestionRequest request
     ) {
-        return suggestionRepository.findById(id)
-                .map(suggestion -> {
-                    try {
-                        SuggestionStatus newStatus = SuggestionStatus.valueOf(request.getStatus().toUpperCase());
-                        suggestion.setStatus(newStatus);
-                        suggestion.setDecidedAt(LocalDateTime.now());
+        log.debug("PATCH /suggestions/{}: newStatus={}", id, request.getStatus());
 
-                        // TODO: When ACCEPTED, update order status and reassigned agent
-                        // - Get order by suggestion.orderId
-                        // - Update order.status = REASSIGNED
-                        // - Update order.assignedAgentId = suggestion.recommendedAgentId
-                        // - Save order
+        if (request.getStatus() == null || request.getStatus().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("Status is required"));
+        }
 
-                        ReassignmentSuggestion saved = suggestionRepository.save(suggestion);
-                        return ResponseEntity.ok(saved);
-                    } catch (IllegalArgumentException e) {
-                        return ResponseEntity.badRequest().<ReassignmentSuggestion>build();
-                    }
-                })
-                .orElseGet(() -> ResponseEntity.notFound().build());
+        try {
+            SuggestionStatus newStatus = SuggestionStatus.valueOf(request.getStatus().toUpperCase());
+            ReassignmentSuggestion updated = suggestionService.updateStatus(id, newStatus);
+
+            // If ACCEPTED: update the order and reassign
+            if (newStatus == SuggestionStatus.ACCEPTED) {
+                handleAcceptedSuggestion(updated);
+            }
+
+            log.info("Suggestion updated: id={}, status={}", id, newStatus);
+            return ResponseEntity.ok(updated);
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to update suggestion: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(new ErrorResponse(e.getMessage()));
+        } catch (Exception e) {
+            log.error("Unexpected error updating suggestion", e);
+            return ResponseEntity.status(500)
+                    .body(new ErrorResponse("Failed to update suggestion"));
+        }
     }
 
-    // DTO Class
+    /**
+     * Internal: Handle accepted suggestion.
+     * Updates the associated order to REASSIGNED status and assigns new agent.
+     */
+    private void handleAcceptedSuggestion(ReassignmentSuggestion suggestion) {
+        try {
+            // Update order: mark as REASSIGNED with new agent
+            orderService.updateStatus(suggestion.getOrderId(), OrderStatus.REASSIGNED);
+
+            log.info(
+                "Order reassigned: orderId={}, newAgentId={}",
+                suggestion.getOrderId(),
+                suggestion.getRecommendedAgentId()
+            );
+
+        } catch (Exception e) {
+            log.error(
+                "Failed to reassign order {} to agent {}",
+                suggestion.getOrderId(),
+                suggestion.getRecommendedAgentId(),
+                e
+            );
+            // Don't throw - suggestion is already accepted, but log for ops team
+        }
+    }
+
+    // ============ DTOs ============
+
     public static class UpdateSuggestionRequest {
         private String status;
 
-        public String getStatus() {
-            return status;
-        }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+    }
 
-        public void setStatus(String status) {
-            this.status = status;
-        }
+    public static class ErrorResponse {
+        private String message;
+
+        public ErrorResponse(String message) { this.message = message; }
+
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
     }
 }

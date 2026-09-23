@@ -5,179 +5,244 @@ import com.ziprun.domain.OrderStatus;
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.domain.TriggerReason;
-import com.ziprun.repository.OrderRepository;
-import com.ziprun.repository.ReassignmentSuggestionRepository;
 import com.ziprun.routing.RoutingService;
 import com.ziprun.routing.RoutingResult;
+import com.ziprun.service.order.OrderService;
+import com.ziprun.service.suggestion.SuggestionService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * REST API for order management.
+ * Order Controller: REST API for order management.
+ *
+ * RESPONSIBILITY: Handle HTTP concerns only
+ * - Parse request body
+ * - Validate input (null checks)
+ * - Call business logic (OrderService, RoutingService)
+ * - Format response
+ * - Return HTTP status codes
+ *
+ * DOES NOT: Query database directly, apply business rules, coordinate complex logic
  *
  * Endpoints:
- * POST /orders - Create order (pre-assigned to agent)
- * GET /orders - List orders (filterable by status)
- * GET /orders/{id} - Get single order
- * POST /orders/{id}/suggest - On-demand reassignment suggestion (calls routing engine)
+ * POST   /orders              - Create order
+ * GET    /orders              - List orders (filterable by status)
+ * GET    /orders/{id}         - Get single order
+ * PATCH  /orders/{id}/status  - Update order status
+ * POST   /orders/{id}/suggest - Request reassignment suggestion
  */
 @RestController
 @RequestMapping("/orders")
 public class OrderController {
+    private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 
-    private final OrderRepository orderRepository;
+    private final OrderService orderService;
+    private final SuggestionService suggestionService;
     private final RoutingService routingService;
-    private final ReassignmentSuggestionRepository suggestionRepository;
 
     public OrderController(
-            OrderRepository orderRepository,
-            RoutingService routingService,
-            ReassignmentSuggestionRepository suggestionRepository
+            OrderService orderService,
+            SuggestionService suggestionService,
+            RoutingService routingService
     ) {
-        this.orderRepository = orderRepository;
+        this.orderService = orderService;
+        this.suggestionService = suggestionService;
         this.routingService = routingService;
-        this.suggestionRepository = suggestionRepository;
     }
 
+    /**
+     * POST /orders - Create order pre-assigned to an agent.
+     * Simulates morning manual assignment workflow.
+     *
+     * Request: { "description": "...", "assignedAgentId": "..." }
+     * Response: 201 Created + order details
+     */
     @PostMapping
-    public ResponseEntity<Order> createOrder(@RequestBody CreateOrderRequest request) {
-        if (request.getAssignedAgentId() == null || request.getAssignedAgentId().isBlank()) {
-            return ResponseEntity.badRequest().build();
-        }
+    public ResponseEntity<?> createOrder(@RequestBody CreateOrderRequest request) {
+        log.debug("POST /orders: description={}, agent={}", request.getDescription(), request.getAssignedAgentId());
+
+        // Validation: empty input
         if (request.getDescription() == null || request.getDescription().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("Description is required"));
+        }
+        if (request.getAssignedAgentId() == null || request.getAssignedAgentId().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("Assigned agent ID is required"));
+        }
+
+        try {
+            // Delegate to service (which validates agent exists, not offline, etc.)
+            Order created = orderService.createOrder(request.getDescription(), request.getAssignedAgentId());
+            return ResponseEntity.status(HttpStatus.CREATED).body(created);
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to create order: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(new ErrorResponse(e.getMessage()));
+        } catch (Exception e) {
+            log.error("Unexpected error creating order", e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ErrorResponse("Failed to create order"));
+        }
+    }
+
+    /**
+     * GET /orders - List all orders, optionally filtered by status.
+     *
+     * Query params: ?status=ASSIGNED | REASSIGNMENT_PENDING | REASSIGNED | DELIVERED
+     * Response: 200 OK + list of orders
+     */
+    @GetMapping
+    public ResponseEntity<List<Order>> listOrders(@RequestParam(name = "status", required = false) String statusStr) {
+        log.debug("GET /orders: status={}", statusStr);
+
+        try {
+            List<Order> orders;
+
+            if (statusStr != null && !statusStr.isBlank()) {
+                OrderStatus status = OrderStatus.valueOf(statusStr.toUpperCase());
+                orders = orderService.findByStatus(status);
+            } else {
+                orders = orderService.findAll();
+            }
+
+            return ResponseEntity.ok(orders);
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Invalid order status: {}", statusStr);
             return ResponseEntity.badRequest().build();
         }
-
-        Order order = new Order();
-        order.setId("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-        order.setDescription(request.getDescription());
-        order.setAssignedAgentId(request.getAssignedAgentId());
-        order.setStatus(OrderStatus.ASSIGNED);
-        order.setCreatedAt(LocalDateTime.now());
-
-        Order saved = orderRepository.save(order);
-        return ResponseEntity.status(HttpStatus.CREATED).body(saved);
     }
 
-    @GetMapping
-    public ResponseEntity<List<Order>> listOrders(
-            @RequestParam(name = "status", required = false) String statusStr
-    ) {
-        if (statusStr != null && !statusStr.isBlank()) {
-            try {
-                OrderStatus status = OrderStatus.valueOf(statusStr.toUpperCase());
-                return ResponseEntity.ok(orderRepository.findByStatus(status));
-            } catch (IllegalArgumentException e) {
-                return ResponseEntity.badRequest().build();
-            }
-        }
-        return ResponseEntity.ok(orderRepository.findAll());
-    }
-
+    /**
+     * GET /orders/{id} - Get single order by ID.
+     *
+     * Response: 200 OK + order details, or 404 Not Found
+     */
     @GetMapping("/{id}")
     public ResponseEntity<Order> getOrder(@PathVariable String id) {
-        return orderRepository.findById(id)
+        log.debug("GET /orders/{}: id={}", id, id);
+
+        return orderService.findById(id)
                 .map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.notFound().build());
+                .orElseGet(() -> {
+                    log.warn("Order not found: {}", id);
+                    return ResponseEntity.notFound().build();
+                });
     }
 
-    @PostMapping("/{id}/suggest")
-    public ResponseEntity<?> suggestReassignment(@PathVariable String id) {
-        return orderRepository.findById(id)
-                .map(order -> {
-                    RoutingResult result = routingService.route(order);
-
-                    if (result.getRecommendedAgentId() == null) {
-                        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                                .body(new ErrorResponse("No available agents for reassignment"));
-                    }
-
-                    ReassignmentSuggestion suggestion = new ReassignmentSuggestion();
-                    suggestion.setId("SUGG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
-                    suggestion.setOrderId(order.getId());
-                    suggestion.setRecommendedAgentId(result.getRecommendedAgentId());
-                    suggestion.setConfidence(result.getConfidence());
-                    suggestion.setReasoning(result.getReasoning());
-                    suggestion.setStatus(SuggestionStatus.PENDING);
-                    suggestion.setTriggerReason(TriggerReason.INITIAL);
-                    suggestion.setCreatedAt(LocalDateTime.now());
-
-                    ReassignmentSuggestion saved = suggestionRepository.save(suggestion);
-                    return ResponseEntity.status(HttpStatus.CREATED).body(saved);
-                })
-                .orElseGet(() -> ResponseEntity.notFound().build());
-    }
-
+    /**
+     * PATCH /orders/{id}/status - Update order status.
+     * Validates state machine transitions via service.
+     *
+     * Request: { "status": "REASSIGNMENT_PENDING" }
+     * Response: 200 OK + updated order, or 400/404
+     */
     @PatchMapping("/{id}/status")
-    public ResponseEntity<Order> updateOrderStatus(
+    public ResponseEntity<?> updateOrderStatus(
             @PathVariable String id,
             @RequestBody UpdateOrderStatusRequest request
     ) {
-        return orderRepository.findById(id)
-                .map(order -> {
-                    try {
-                        OrderStatus status = OrderStatus.valueOf(request.getStatus().toUpperCase());
-                        order.setStatus(status);
-                        return ResponseEntity.ok(orderRepository.save(order));
-                    } catch (IllegalArgumentException e) {
-                        return ResponseEntity.badRequest().<Order>build();
-                    }
-                })
-                .orElseGet(() -> ResponseEntity.notFound().build());
+        log.debug("PATCH /orders/{}/status: newStatus={}", id, request.getStatus());
+
+        if (request.getStatus() == null || request.getStatus().isBlank()) {
+            return ResponseEntity.badRequest().body(new ErrorResponse("Status is required"));
+        }
+
+        try {
+            OrderStatus newStatus = OrderStatus.valueOf(request.getStatus().toUpperCase());
+            Order updated = orderService.updateStatus(id, newStatus);
+            return ResponseEntity.ok(updated);
+
+        } catch (IllegalArgumentException e) {
+            log.warn("Failed to update order status: {}", e.getMessage());
+            return ResponseEntity.badRequest().body(new ErrorResponse(e.getMessage()));
+        }
     }
 
-    // DTO Classes
+    /**
+     * POST /orders/{id}/suggest - Request reassignment suggestion.
+     * Calls routing engine, gets AI or rule-based recommendation, persists suggestion.
+     *
+     * Response: 201 Created + suggestion, or 400/404
+     */
+    @PostMapping("/{id}/suggest")
+    public ResponseEntity<?> suggestReassignment(@PathVariable String id) {
+        log.debug("POST /orders/{}/suggest: orderId={}", id, id);
+
+        // Get order
+        Order order = orderService.findById(id)
+                .orElseGet(() -> {
+                    log.warn("Order not found for suggestion: {}", id);
+                    return null;
+                });
+
+        if (order == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        try {
+            // Call routing engine (which uses AI or rule-based strategy)
+            RoutingResult result = routingService.route(order);
+
+            if (result.getRecommendedAgentId() == null) {
+                log.warn("Routing returned no recommendation for order {}", id);
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                        .body(new ErrorResponse("No available agents for reassignment"));
+            }
+
+            // Create suggestion entity
+            ReassignmentSuggestion suggestion = new ReassignmentSuggestion();
+            suggestion.setId("SUGG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+            suggestion.setOrderId(order.getId());
+            suggestion.setRecommendedAgentId(result.getRecommendedAgentId());
+            suggestion.setConfidence(result.getConfidence());
+            suggestion.setReasoning(result.getReasoning());
+            suggestion.setStatus(SuggestionStatus.PENDING);
+            suggestion.setTriggerReason(TriggerReason.INITIAL);
+            suggestion.setCreatedAt(LocalDateTime.now());
+
+            // Persist via service
+            ReassignmentSuggestion saved = suggestionService.createSuggestion(suggestion);
+            return ResponseEntity.status(HttpStatus.CREATED).body(saved);
+
+        } catch (Exception e) {
+            log.error("Failed to generate suggestion for order {}", id, e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(new ErrorResponse("Failed to generate suggestion"));
+        }
+    }
+
+    // ============ DTOs ============
+
     public static class CreateOrderRequest {
         private String description;
         private String assignedAgentId;
 
-        public String getDescription() {
-            return description;
-        }
+        public String getDescription() { return description; }
+        public void setDescription(String description) { this.description = description; }
 
-        public void setDescription(String description) {
-            this.description = description;
-        }
-
-        public String getAssignedAgentId() {
-            return assignedAgentId;
-        }
-
-        public void setAssignedAgentId(String assignedAgentId) {
-            this.assignedAgentId = assignedAgentId;
-        }
+        public String getAssignedAgentId() { return assignedAgentId; }
+        public void setAssignedAgentId(String assignedAgentId) { this.assignedAgentId = assignedAgentId; }
     }
 
     public static class UpdateOrderStatusRequest {
         private String status;
 
-        public String getStatus() {
-            return status;
-        }
-
-        public void setStatus(String status) {
-            this.status = status;
-        }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
     }
 
     public static class ErrorResponse {
         private String message;
 
-        public ErrorResponse(String message) {
-            this.message = message;
-        }
+        public ErrorResponse(String message) { this.message = message; }
 
-        public String getMessage() {
-            return message;
-        }
-
-        public void setMessage(String message) {
-            this.message = message;
-        }
+        public String getMessage() { return message; }
+        public void setMessage(String message) { this.message = message; }
     }
 }
