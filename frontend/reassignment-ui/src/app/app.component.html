@@ -1,20 +1,37 @@
-<div class="dashboard">
+<div class="app-container">
+  <!-- Header -->
   <header class="app-header">
-    <div class="header-content">
-      <h1>🚚 {{ title }}</h1>
-      <p class="subtitle">AI-powered order reassignment when agents go offline</p>
+    <div class="header-inner">
+      <div class="header-title">
+        <div class="logo">🚚</div>
+        <div>
+          <h1>ZipRun Reassignment Engine</h1>
+          <p class="header-subtitle">AI-powered order reassignment system</p>
+        </div>
+      </div>
+      <div class="header-stats">
+        <div class="stat">
+          <span class="stat-label">Status</span>
+          <span class="stat-value">🟢 Live</span>
+        </div>
+      </div>
     </div>
   </header>
 
-  <div class="dashboard-content">
-    <div class="left-panel">
-      <app-agent-roster></app-agent-roster>
-    </div>
+  <!-- Main Dashboard -->
+  <main class="dashboard-main">
+    <div class="dashboard-grid">
+      <!-- Left: Agent Roster -->
+      <aside class="dashboard-aside">
+        <app-agent-roster></app-agent-roster>
+      </aside>
 
-    <div class="right-panel">
-      <app-orders-list></app-orders-list>
+      <!-- Right: Orders & Suggestions -->
+      <section class="dashboard-content">
+        <app-orders-list></app-orders-list>
+      </section>
     </div>
-  </div>
+  </main>
 </div>
 
 <router-outlet />

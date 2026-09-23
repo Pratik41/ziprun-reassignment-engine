@@ -51,28 +51,40 @@ import { CommonModule } from '@angular/common';
   styles: [`
     .suggestion-card {
       background: white;
-      border: 1px solid #e0e0e0;
-      border-radius: 8px;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
       padding: 20px;
-      margin-bottom: 15px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
       position: relative;
+      transition: all 0.3s ease;
+      border-left: 4px solid #d1d5db;
+    }
+
+    .suggestion-card:hover {
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
     }
 
     .suggestion-card.replan-badge {
-      border-left: 4px solid #2196f3;
+      border-left: 4px solid #3b82f6;
+      background: linear-gradient(135deg, #eff6ff 0%, white 100%);
     }
 
     .badge-replan {
       position: absolute;
-      top: 10px;
-      right: 10px;
-      background: #2196f3;
+      top: 14px;
+      right: 14px;
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
       color: white;
-      padding: 4px 12px;
+      padding: 6px 14px;
       border-radius: 20px;
-      font-size: 12px;
-      font-weight: bold;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+      display: flex;
+      align-items: center;
+      gap: 6px;
     }
 
     .suggestion-content {
