@@ -315,9 +315,13 @@ export class OrdersListComponent implements OnInit {
   loadOrders() {
     this.loading = true;
     this.error = null;
-    this.apiService.getOrdersByStatus('REASSIGNMENT_PENDING').subscribe({
+    // Load ALL orders (both ASSIGNED and REASSIGNMENT_PENDING)
+    this.apiService.getOrders().subscribe({
       next: (orders) => {
-        this.orders = orders;
+        // Show both ASSIGNED (waiting for suggestion) and REASSIGNMENT_PENDING (have suggestion)
+        this.orders = orders.filter(o =>
+          o.status === 'ASSIGNED' || o.status === 'REASSIGNMENT_PENDING'
+        );
         this.loading = false;
       },
       error: (err) => {
