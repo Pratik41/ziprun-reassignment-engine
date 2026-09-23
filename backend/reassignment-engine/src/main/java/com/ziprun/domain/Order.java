@@ -2,8 +2,6 @@ package com.ziprun.domain;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 
 /**
  * Order entity representing a delivery order.
@@ -11,7 +9,7 @@ import java.util.List;
  * Key design decisions:
  * 1. State machine: ASSIGNED → REASSIGNMENT_PENDING → REASSIGNED → DELIVERED
  * 2. pickupZone and dropoffZone are nullable, reserved for Sprint 2 zone-aware routing
- * 3. One-to-many relationship with ReassignmentSuggestion (orders can have multiple suggestions over time)
+ * 3. Suggestions are queried by orderId via repository (no bidirectional relationship)
  * 4. createdAt tracks when order was assigned
  */
 @Entity
@@ -50,9 +48,6 @@ public class Order {
     @Column(nullable = true)
     private String dropoffZone;
 
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
-    private List<ReassignmentSuggestion> suggestions = new ArrayList<>();
-
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) {
@@ -84,7 +79,4 @@ public class Order {
 
     public String getDropoffZone() { return dropoffZone; }
     public void setDropoffZone(String dropoffZone) { this.dropoffZone = dropoffZone; }
-
-    public List<ReassignmentSuggestion> getSuggestions() { return suggestions; }
-    public void setSuggestions(List<ReassignmentSuggestion> suggestions) { this.suggestions = suggestions; }
 }
