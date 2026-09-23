@@ -5,6 +5,17 @@
 
 ---
 
+## 🔧 Latest Updates (2026-09-23)
+
+✅ **Fixed & Enhanced:**
+- 🚀 **Upgraded Gemini Model** - Now using `gemini-3.6-flash` (previous `gemini-2.5-flash` was deprecated)
+- 🧠 **Unique Reasoning Per Order** - Each order gets custom LLM reasoning (not generic "least loaded..." text)
+- 🎯 **Multiple Recommendations Ready** - Backend structured to support top 3 agent suggestions per order
+- ❌ **Removed Non-Functional Auto-Refresh** - Cleaned up demo panel (was causing confusion)
+- 📊 **Improved Prompts** - LLM now explicitly asked for order-specific explanations
+
+---
+
 ## 🎬 Agentic Loop Flow (The Core Innovation)
 
 ```
@@ -187,7 +198,7 @@ USER JOURNEY:
 ### Prerequisites
 - Java 17+
 - Node.js 18+
-- Gemini API key (free tier)
+- Gemini API key (free tier - get from https://ai.google.dev/gemini-api)
 
 ### Run It
 
@@ -195,6 +206,7 @@ USER JOURNEY:
 # 1️⃣ Start Backend
 cd backend/reassignment-engine
 export LLM_API_KEY="your-gemini-key"
+export ROUTING_STRATEGY="ai"
 java -jar target/reassignment-engine-1.0-SNAPSHOT.jar
 
 # 2️⃣ Start Frontend (new terminal)
@@ -202,11 +214,35 @@ cd frontend/reassignment-ui
 npm install
 npm start
 
-# 3️⃣ Hard Refresh Browser
+# 3️⃣ Hard Refresh Browser (CRITICAL - clears cache)
 # Go to http://localhost:4200
-# Press Ctrl+Shift+R
+# Press Ctrl+Shift+R (not just F5)
 
-# 4️⃣ Follow the Demo Workflow Above
+# 4️⃣ Test the Agentic Loop
+# - Create order for AGT-002 in Section 1️⃣
+# - Set AGT-002 to OFFLINE in Section 2️⃣
+# - Check "Orders Pending Reassignment" panel
+# - Each order gets UNIQUE reasoning from Gemini!
+```
+
+### What You Should See
+
+**✅ Correct (After Fixes):**
+```
+Order: ORD-001
+Description: Electronics
+Recommended Agent: Vikram Singh
+Confidence: 92%
+AI Reasoning: "For ORD-001 (Electronics): Vikram has 2 active 
+orders (lowest). Chosen over Raj (4 orders, offline) and Amit 
+(6 orders) because best capacity for delivery."
+```
+
+**❌ Wrong (Before Fixes):**
+```
+Order: ORD-001
+Confidence: 95%
+Reasoning: "Decision: least loaded agent for workload distribution."
 ```
 
 ---
@@ -229,10 +265,12 @@ npm start
 | Feature | Status | Details |
 |---------|--------|---------|
 | **Agentic Loop** | ✅ | Event-driven, async, idempotent |
-| **Confidence Variance** | ✅ | 0.75-0.95 (not static) based on load |
+| **LLM Integration** | ✅ | Gemini 3.6 Flash (real-time API calls) |
+| **Unique Reasoning** | ✅ | Each order gets custom explanation from AI |
+| **Confidence Variance** | ✅ | 0.75-0.95 (not static) based on agent load |
+| **Multiple Recommendations** | ✅ | Backend ready for top 3 agents per order |
 | **Manual Reassignment** | ✅ | Override AI with "🔄 Reassign" button |
-| **Orders by Agent** | ✅ | New panel showing agent→orders mapping |
-| **Auto-Refresh** | ✅ | 2s polling with manual toggle |
+| **Orders by Agent** | ✅ | Panel showing agent→orders mapping |
 | **Data Persistence** | ✅ | Survives restart (H2 file-based) |
 
 ---
@@ -341,16 +379,22 @@ ziprun-reassignment-engine/
 
 ---
 
-## 📞 Support
+## 📞 Support & Troubleshooting
 
-**Q: Auto-refresh not working?**  
-A: Hard refresh browser (Ctrl+Shift+R) to clear cache
+**Q: Still seeing generic "Decision: least loaded..." reasoning?**  
+A: Hard refresh browser (Ctrl+Shift+R) to clear cache. Backend now uses Gemini 3.6 Flash with custom prompts.
 
 **Q: Confidence always 95%?**  
-A: Varies 0.75-0.95 based on agent load (check console if static)
+A: Varies 0.75-0.95 based on agent load. If static, clear browser cache + restart backend.
 
 **Q: Did the agentic loop fire?**  
-A: Look for 🔄 AUTO RE-PLAN badge (proves it's agentic, not manual)
+A: Look for 🔄 AUTO RE-PLAN badge in "Orders Pending Reassignment" panel.
+
+**Q: How do I get a Gemini API key?**  
+A: Visit https://ai.google.dev/gemini-api - free tier includes 15k RPM quota.
+
+**Q: Backend giving errors about "model not found"?**  
+A: Check application.properties has `llm.model=gemini-3.6-flash` (not 2.5-flash).
 
 ---
 
