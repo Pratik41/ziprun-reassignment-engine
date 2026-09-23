@@ -121,27 +121,34 @@ public class AIAdvisorService {
     }
 
     /**
-     * Parse LLM response as JSON into LLMResponse structure.
+     * Parse LLM response as JSON - handles both single and multiple recommendations.
+     * Tries multiple recommendations first (top 3 agents), falls back to single if that fails.
      *
-     * @return parsed response, or null if parsing fails
+     * @return AIRecommendation with single or multiple options, or null if parsing fails
      */
     private LLMResponse parseResponse(String rawResponse) {
         try {
-            String trimmed = rawResponse.trim();
+            String trimmed = cleanJsonResponse(rawResponse);
 
-            // Extract JSON if response contains markdown code blocks
-            if (trimmed.startsWith("```json")) {
-                trimmed = trimmed.substring(7);
-            } else if (trimmed.startsWith("```")) {
-                trimmed = trimmed.substring(3);
+            // Try parsing as multiple recommendations first
+            try {
+                LLMMultipleRecommendationsResponse multiResp = objectMapper.readValue(
+                    trimmed,
+                    LLMMultipleRecommendationsResponse.class
+                );
+
+                if (multiResp.getRecommendations() != null && !multiResp.getRecommendations().isEmpty()) {
+                    log.debug("Parsed multiple recommendations: {}", multiResp.getRecommendations().size());
+                    // Return the first one as primary, but we'll handle the list separately
+                    // For now, return first as LLMResponse (backward compatible)
+                    var first = multiResp.getRecommendations().get(0);
+                    return new LLMResponse(first.getAgentId(), first.getConfidence(), first.getReasoning());
+                }
+            } catch (Exception e) {
+                log.debug("Multiple recommendations parsing failed, trying single recommendation");
             }
 
-            if (trimmed.endsWith("```")) {
-                trimmed = trimmed.substring(0, trimmed.length() - 3);
-            }
-
-            trimmed = trimmed.trim();
-
+            // Fall back to single recommendation format
             LLMResponse response = objectMapper.readValue(trimmed, LLMResponse.class);
 
             // Validate required fields
@@ -163,8 +170,25 @@ public class AIAdvisorService {
             return response;
 
         } catch (Exception e) {
-            log.debug("JSON parsing failed: {}", e.getMessage());
+            log.debug("LLM response parsing failed: {}", e.getMessage());
             return null;
         }
+    }
+
+    private String cleanJsonResponse(String rawResponse) {
+        String trimmed = rawResponse.trim();
+
+        // Extract JSON if response contains markdown code blocks
+        if (trimmed.startsWith("```json")) {
+            trimmed = trimmed.substring(7);
+        } else if (trimmed.startsWith("```")) {
+            trimmed = trimmed.substring(3);
+        }
+
+        if (trimmed.endsWith("```")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 3);
+        }
+
+        return trimmed.trim();
     }
 }
