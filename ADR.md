@@ -151,7 +151,7 @@ Partly in place: `RoutingContext.pendingLoad` makes each routing call aware of s
 ### Deliberate exclusions
 
 1. **Auto-assigning high-confidence suggestions.** Excluded on purpose (see ADR-9). The checkpoint is a requirement, not a missing feature.
-2. **SSE token streaming (+5 bonus).** Correctness of the loop (timeouts, idempotency, transactional boundaries, honest fallbacks) is a requirement; watching tokens arrive is an enhancement. Streaming also complicates validation, because the reply can't be checked until it's complete.
+2. **SSE streaming was built last, on purpose.** I only added `POST /orders/{id}/suggest/stream` after the loop's correctness work was done. It's an *add-on* to the same path, not a second one: the endpoint attaches a `ReasoningListener` to the `RoutingContext`; the AI strategy streams from the provider (Gemini `streamGenerateContent?alt=sse`, OpenAI-style `stream:true`) and `ReasoningExtractor` forwards only the `reasoning` text, decoded incrementally from the JSON. The full reply is still parsed and validated after the stream ends. If a provider fails mid-stream or validation fails, the client gets a `restart` event and the stream still ends with the persisted (possibly rule-based) suggestion. Streaming is only on the on-demand path; async re-plans have no one watching.
 3. **Full dispatch board / SLA countdown / zone map.** The "orders by agent" view covers agent load; a board with SLA colours needs SLA data that doesn't exist yet.
 4. **Auth on the API.** Out of scope for the sprint; noted because `PUT /routing/strategy` is an operational lever that would need it in production.
 5. **Durable event delivery** (broker / outbox), covered in ADR-4.

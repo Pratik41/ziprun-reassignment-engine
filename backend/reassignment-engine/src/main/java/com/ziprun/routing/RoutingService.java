@@ -92,6 +92,7 @@ public class RoutingService {
             results = strategy.recommend(order, candidates, enriched);
         } catch (RuntimeException e) {
             log.error("Strategy '{}' threw for order {}. Falling back to rule-based.", strategyName, order.getId(), e);
+            enriched.listener().restart("Strategy " + strategyName + " failed, using rule-based routing");
             results = strategies.get(RuleBasedStrategy.NAME).recommend(order, candidates, enriched).stream()
                 .map(r -> r.withSource(RuleBasedStrategy.NAME + " (fallback: " + strategyName + " failed)"))
                 .toList();

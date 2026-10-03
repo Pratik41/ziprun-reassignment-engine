@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.Order;
+import com.ziprun.routing.ReasoningListener;
 import com.ziprun.routing.RoutingContext;
 import com.ziprun.routing.gateway.LLMException;
 import com.ziprun.routing.gateway.LLMGateway;
@@ -48,10 +49,36 @@ public class AIAdvisorService {
             : PromptBuilder.buildInitialAssignmentPrompt(order, availableAgents, context);
         log.debug("{} prompt for order {}:\n{}", context.isRecovery() ? "Re-plan" : "Initial", order.getId(), prompt);
 
-        LLMGateway.LLMReply reply = llmGateway.callLLM(prompt);
+        LLMGateway.LLMReply reply = context.isStreaming()
+            ? streamReasoning(prompt, context.listener())
+            : llmGateway.callLLM(prompt);
         List<AIRecommendationOption> options = parse(reply.text());
         log.debug("LLM ({}) returned {} option(s) for order {}", reply.provider(), options.size(), order.getId());
         return new AIRecommendation(reply.provider(), options);
+    }
+
+    /**
+     * Streams the reply, forwarding only the top recommendation's reasoning text
+     * to the listener as it arrives. The full reply is still parsed and
+     * validated afterwards exactly like the non-streaming path.
+     */
+    private LLMGateway.LLMReply streamReasoning(String prompt, ReasoningListener listener) {
+        ReasoningExtractor extractor = new ReasoningExtractor();
+        return llmGateway.streamLLM(prompt, new LLMGateway.StreamSink() {
+            @Override
+            public void chunk(String text) {
+                String delta = extractor.feed(text);
+                if (!delta.isEmpty()) {
+                    listener.token(delta);
+                }
+            }
+
+            @Override
+            public void providerFailed(String provider, LLMException failure) {
+                extractor.reset();
+                listener.restart(provider + " failed (" + failure.getKind() + "), trying next provider");
+            }
+        });
     }
 
     /**

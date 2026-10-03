@@ -23,4 +23,17 @@ public interface LLMProvider {
      * @throws LLMException classified failure (timeout, rate limit, HTTP error, empty)
      */
     String callLLM(String prompt);
+
+    /**
+     * Streaming variant: pushes text chunks to onChunk as they arrive and
+     * returns the full text. Providers without native streaming deliver the
+     * whole reply as one chunk.
+     *
+     * @throws LLMException same classification as callLLM
+     */
+    default String streamLLM(String prompt, java.util.function.Consumer<String> onChunk) {
+        String text = callLLM(prompt);
+        onChunk.accept(text);
+        return text;
+    }
 }

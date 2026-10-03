@@ -78,6 +78,41 @@ public class LLMGateway {
         throw last;
     }
 
+    /** Callbacks for a streaming call. */
+    public interface StreamSink {
+        void chunk(String text);
+
+        /** A provider failed after possibly emitting chunks; anything received so far is void. */
+        void providerFailed(String provider, LLMException failure);
+    }
+
+    /**
+     * Streaming variant of callLLM with the same provider-chain semantics.
+     */
+    public LLMReply streamLLM(String prompt, StreamSink sink) {
+        LLMException last = new LLMException(LLMException.Kind.NOT_CONFIGURED, "No LLM provider configured");
+
+        for (LLMProvider provider : chain) {
+            if (!provider.isConfigured()) {
+                last = new LLMException(LLMException.Kind.NOT_CONFIGURED, provider.getName() + " has no API key/URL");
+                continue;
+            }
+            try {
+                String text = provider.streamLLM(prompt, sink::chunk);
+                return new LLMReply(provider.getName(), text);
+            } catch (LLMException e) {
+                log.warn("LLM provider {} failed while streaming [{}]: {}. Trying next provider.",
+                    provider.getName(), e.getKind(), e.getMessage());
+                last = e;
+            } catch (RuntimeException e) {
+                log.warn("LLM provider {} failed unexpectedly while streaming: {}", provider.getName(), e.toString());
+                last = new LLMException(LLMException.Kind.HTTP_ERROR, provider.getName() + " failed: " + e.getMessage(), e);
+            }
+            sink.providerFailed(provider.getName(), last);
+        }
+        throw last;
+    }
+
     public List<String> getProviderNames() {
         return chain.stream().map(LLMProvider::getName).toList();
     }

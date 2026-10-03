@@ -67,6 +67,15 @@ public class LLMException extends RuntimeException {
         return new LLMException(Kind.HTTP_ERROR, provider + " call failed: " + e.getMessage(), e);
     }
 
+    /**
+     * Classifies a non-2xx status seen while reading a streaming response.
+     */
+    public static LLMException fromStatus(String provider, int status) {
+        return status == 429
+            ? new LLMException(Kind.RATE_LIMITED, provider + " rate limited / quota exhausted (429)")
+            : new LLMException(Kind.HTTP_ERROR, provider + " returned HTTP " + status);
+    }
+
     private static boolean isTimeout(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {
             if (t instanceof SocketTimeoutException || t instanceof HttpTimeoutException) {

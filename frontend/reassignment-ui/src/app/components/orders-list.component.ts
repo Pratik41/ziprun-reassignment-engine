@@ -6,6 +6,12 @@ import { RefreshService } from '../services/refresh.service';
 import { SuggestionCardComponent } from './suggestion-card.component';
 import { Observable, Subscription, forkJoin } from 'rxjs';
 
+interface LiveReasoning {
+  strategy: string;
+  text: string;
+  notice: string | null;
+}
+
 @Component({
   selector: 'app-orders-list',
   standalone: true,
@@ -72,14 +78,24 @@ import { Observable, Subscription, forkJoin } from 'rxjs';
                       </small>
                     </div>
                     <div style="display: flex; gap: 8px;">
-                      <button (click)="requestSuggestion(order.id)" class="btn-suggest" [disabled]="requestingOrderId === order.id">
-                        {{ requestingOrderId === order.id ? 'Thinking…' : 'Get Suggestion' }}
+                      <button (click)="requestSuggestion(order.id)" class="btn-suggest" [disabled]="!!streams[order.id]">
+                        {{ streams[order.id] ? 'Thinking…' : 'Get Suggestion' }}
                       </button>
                       <button (click)="toggleReassignMode(order.id)" class="btn-manual">
                         🔄 Reassign
                       </button>
                     </div>
                   </div>
+
+                  @if (streams[order.id]; as live) {
+                    <div class="live-reasoning">
+                      <div class="live-label">🧠 {{ live.strategy || 'routing' }} is reasoning…</div>
+                      @if (live.notice) {
+                        <div class="live-notice">⚠️ {{ live.notice }}</div>
+                      }
+                      <p class="live-text">{{ live.text }}<span class="cursor">▍</span></p>
+                    </div>
+                  }
 
                   @if (reassigningOrderId === order.id) {
                     <div class="reassign-panel">
@@ -107,6 +123,43 @@ import { Observable, Subscription, forkJoin } from 'rxjs';
     </div>
   `,
   styles: [`
+    .live-reasoning {
+      margin-top: 12px;
+      padding: 12px;
+      background: #f5f3ff;
+      border-left: 3px solid #6366f1;
+      border-radius: 4px;
+    }
+
+    .live-label {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #4338ca;
+      margin-bottom: 6px;
+    }
+
+    .live-notice {
+      font-size: 0.8rem;
+      color: #92400e;
+      margin-bottom: 6px;
+    }
+
+    .live-text {
+      margin: 0;
+      white-space: pre-wrap;
+      color: #374151;
+      font-style: italic;
+    }
+
+    .cursor {
+      animation: blink 1s steps(1) infinite;
+      color: #6366f1;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
     .orders-container {
       background: white;
       border-radius: 12px;
@@ -422,7 +475,8 @@ export class OrdersListComponent implements OnInit, OnDestroy {
   error: string | null = null;
   actionError: string | null = null;
   busySuggestionId: string | null = null;
-  requestingOrderId: string | null = null;
+  streams: { [orderId: string]: LiveReasoning } = {};
+  private streamCancels: { [orderId: string]: () => void } = {};
   reassigningOrderId: string | null = null;
   selectedAgentForReassign: { [orderId: string]: string } = {};
   private loadedOnce = false;
@@ -442,6 +496,7 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     if (this.refreshSubscription) {
       this.refreshSubscription.unsubscribe();
     }
+    Object.values(this.streamCancels).forEach(cancel => cancel());
   }
 
   loadOrders() {
@@ -486,19 +541,36 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     return agent ? `${agent.name} (${agentId})` : agentId;
   }
 
+  /**
+   * Streams the suggestion (SSE): reasoning appears token by token, then the
+   * persisted suggestion replaces the live panel on the next load.
+   */
   requestSuggestion(orderId: string) {
     this.actionError = null;
-    this.requestingOrderId = orderId;
-    this.apiService.getSuggestion(orderId).subscribe({
-      next: () => {
-        this.requestingOrderId = null;
-        this.loadOrders();
+    const live: LiveReasoning = { strategy: '', text: '', notice: null };
+    this.streams[orderId] = live;
+
+    this.streamCancels[orderId] = this.apiService.streamSuggestion(orderId, {
+      start: (strategy) => live.strategy = strategy,
+      token: (text) => live.text += text,
+      restart: (reason) => {
+        live.text = '';
+        live.notice = reason;
       },
-      error: (err) => {
-        this.requestingOrderId = null;
-        this.actionError = this.messageFrom(err, 'Failed to get suggestion');
+      suggestion: () => {
+        this.endStream(orderId);
+        this.refreshService.triggerRefresh();
+      },
+      error: (message) => {
+        this.endStream(orderId);
+        this.actionError = `Failed to get suggestion: ${message}`;
       }
     });
+  }
+
+  private endStream(orderId: string) {
+    delete this.streams[orderId];
+    delete this.streamCancels[orderId];
   }
 
   handleAccept(suggestionId: string) {

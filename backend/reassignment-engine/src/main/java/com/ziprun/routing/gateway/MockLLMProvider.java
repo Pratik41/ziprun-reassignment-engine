@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,12 +37,18 @@ public class MockLLMProvider implements LLMProvider {
     private record Row(String id, String name, int effectiveLoad) {
     }
 
+    private static final int STREAM_CHUNK = 6;
+
     private final ObjectMapper objectMapper;
     private final String failMode;
+    private final long streamDelayMs;
 
-    public MockLLMProvider(ObjectMapper objectMapper, @Value("${llm.mock.fail-mode:none}") String failMode) {
+    public MockLLMProvider(ObjectMapper objectMapper,
+                           @Value("${llm.mock.fail-mode:none}") String failMode,
+                           @Value("${llm.mock.stream-delay-ms:40}") long streamDelayMs) {
         this.objectMapper = objectMapper;
         this.failMode = failMode;
+        this.streamDelayMs = streamDelayMs;
     }
 
     @Override
@@ -52,6 +59,24 @@ public class MockLLMProvider implements LLMProvider {
     @Override
     public boolean isConfigured() {
         return true;
+    }
+
+    /**
+     * Emits the reply in small paced chunks so the SSE path can be demoed without a key.
+     */
+    @Override
+    public String streamLLM(String prompt, Consumer<String> onChunk) {
+        String text = callLLM(prompt);
+        for (int i = 0; i < text.length(); i += STREAM_CHUNK) {
+            onChunk.accept(text.substring(i, Math.min(text.length(), i + STREAM_CHUNK)));
+            try {
+                Thread.sleep(streamDelayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new LLMException(LLMException.Kind.TIMEOUT, "mock stream interrupted", e);
+            }
+        }
+        return text;
     }
 
     @Override

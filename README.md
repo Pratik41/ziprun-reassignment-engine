@@ -40,7 +40,8 @@ On first start the database is seeded from `data.sql` (brief Addendum A): 5 agen
    Suggestions are spread across Rahul and Kiran rather than all going to one agent.
 4. **Accept** one. The order moves to the new agent and both agents' loads update in the roster.
 5. Flip Priya Available → Offline again. No duplicate suggestions appear.
-6. Switch **Routing Strategy** between `ai` and `rule-based` at the top of the demo panel. It takes effect immediately, with no restart.
+6. **Reject** a suggestion, then click **Get Suggestion** on that order. The AI's reasoning streams in live (SSE) before the new suggestion card appears.
+7. Switch **Routing Strategy** between `ai` and `rule-based` at the top of the demo panel. It takes effect immediately, with no restart.
 
 The same flow with curl:
 
@@ -59,6 +60,7 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 | `GET` | `/orders/{id}` | |
 | `PATCH` | `/orders/{id}/status` | state machine enforced (409 on illegal transition) |
 | `POST` | `/orders/{id}/suggest` | runs the active strategy, persists an `INITIAL` suggestion → 201 |
+| `POST` | `/orders/{id}/suggest/stream` | same, as Server-Sent Events: `start`, `token` (reasoning text as generated), `restart` (fallback), then `suggestion` or `error` |
 | `POST` | `/orders/{id}/reassign` | manual override `{newAgentId}` |
 | `GET` | `/agents?status=` | |
 | `PATCH` | `/agents/{id}/status` | `OFFLINE` fires the agentic loop asynchronously; returns immediately |
@@ -117,6 +119,6 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-28 tests:
-- Unit: rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain.
-- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; structured errors; async fallback when the AI hallucinates.
+34 tests:
+- Unit: rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction.
+- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).

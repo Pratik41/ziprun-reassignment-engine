@@ -1,5 +1,6 @@
 package com.ziprun.routing.gateway;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -28,19 +29,21 @@ public class LLMConfig {
     @Bean
     public LLMProvider groqProvider(
             RestClient llmRestClient,
+            ObjectMapper objectMapper,
             @Value("${llm.groq.api-key:}") String apiKey,
             @Value("${llm.groq.model:llama-3.1-8b-instant}") String model,
             @Value("${llm.groq.base-url:https://api.groq.com/openai/v1}") String baseUrl
     ) {
-        return new OpenAICompatibleProvider("groq", llmRestClient, baseUrl, model, apiKey, true);
+        return new OpenAICompatibleProvider("groq", llmRestClient, objectMapper, baseUrl, model, apiKey, true);
     }
 
     @Bean
     public LLMProvider ollamaProvider(
             RestClient llmRestClient,
+            ObjectMapper objectMapper,
             @Value("${llm.ollama.model:llama3.1}") String model,
             @Value("${llm.ollama.base-url:http://localhost:11434/v1}") String baseUrl
     ) {
-        return new OpenAICompatibleProvider("ollama", llmRestClient, baseUrl, model, null, false);
+        return new OpenAICompatibleProvider("ollama", llmRestClient, objectMapper, baseUrl, model, null, false);
     }
 }

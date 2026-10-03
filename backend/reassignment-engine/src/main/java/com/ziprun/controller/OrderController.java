@@ -5,6 +5,7 @@ import com.ziprun.domain.OrderStatus;
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.TriggerReason;
 import com.ziprun.exception.InvalidStateException;
+import com.ziprun.routing.ReasoningListener;
 import com.ziprun.routing.RoutingContext;
 import com.ziprun.routing.RoutingResult;
 import com.ziprun.routing.RoutingService;
@@ -14,9 +15,15 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Order Controller: REST API for order management.
@@ -32,6 +39,7 @@ import java.util.List;
  * GET    /orders/{id}         - Get single order
  * PATCH  /orders/{id}/status  - Update order status (state machine enforced)
  * POST   /orders/{id}/suggest - Run active routing strategy, persist + return suggestion (201)
+ * POST   /orders/{id}/suggest/stream - Same, streaming the AI's reasoning as SSE
  * POST   /orders/{id}/reassign- Manual override by ops
  */
 @RestController
@@ -39,18 +47,23 @@ import java.util.List;
 public class OrderController {
     private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 
+    private static final long STREAM_TIMEOUT_MS = 60_000;
+
     private final OrderService orderService;
     private final SuggestionService suggestionService;
     private final RoutingService routingService;
+    private final TaskExecutor taskExecutor;
 
     public OrderController(
             OrderService orderService,
             SuggestionService suggestionService,
-            RoutingService routingService
+            RoutingService routingService,
+            @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor
     ) {
         this.orderService = orderService;
         this.suggestionService = suggestionService;
         this.routingService = routingService;
+        this.taskExecutor = taskExecutor;
     }
 
     /**
@@ -98,16 +111,94 @@ public class OrderController {
     @PostMapping("/{id}/suggest")
     @ResponseStatus(HttpStatus.CREATED)
     public ReassignmentSuggestion suggestReassignment(@PathVariable String id) {
+        return routeAndPersist(suggestableOrder(id), RoutingContext.initial());
+    }
+
+    /**
+     * POST /orders/{id}/suggest/stream - Same as /suggest, streamed as Server-Sent Events.
+     *
+     * Events (data is JSON):
+     *   start      {orderId, strategy}
+     *   token      {text}      next fragment of the AI's reasoning, as it is generated
+     *   restart    {reason}    discard streamed text (provider failed / fallback to rule-based)
+     *   suggestion {...}       the persisted suggestion (same body as /suggest); stream ends
+     *   error      {message}   nothing was persisted; stream ends
+     *
+     * Validation and fallback are identical to /suggest: streaming only adds a
+     * ReasoningListener to the RoutingContext.
+     */
+    @PostMapping(value = "/{id}/suggest/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter streamSuggestion(@PathVariable String id) {
+        Order order = suggestableOrder(id); // 404/409 as plain JSON before the stream opens
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
+        SseSender sse = new SseSender(emitter);
+
+        taskExecutor.execute(() -> {
+            try {
+                sse.send("start", Map.of("orderId", id, "strategy", routingService.getActiveStrategyName()));
+                ReasoningListener listener = new ReasoningListener() {
+                    @Override
+                    public void token(String text) {
+                        sse.send("token", Map.of("text", text));
+                    }
+
+                    @Override
+                    public void restart(String reason) {
+                        sse.send("restart", Map.of("reason", reason));
+                    }
+                };
+                ReassignmentSuggestion saved = routeAndPersist(order, RoutingContext.initial().withListener(listener));
+                sse.send("suggestion", saved);
+            } catch (Exception e) {
+                log.warn("Streaming suggestion for order {} failed: {}", id, e.getMessage());
+                sse.send("error", Map.of("message", e.getMessage() == null ? "Suggestion failed" : e.getMessage()));
+            } finally {
+                emitter.complete();
+            }
+        });
+        return emitter;
+    }
+
+    private Order suggestableOrder(String id) {
         Order order = orderService.getById(id);
         if (order.getStatus() == OrderStatus.DELIVERED) {
             throw new InvalidStateException("Order " + id + " is already DELIVERED");
         }
+        return order;
+    }
 
-        RoutingResult result = routingService.route(order, RoutingContext.initial())
-            .orElseThrow(() -> new InvalidStateException("No AVAILABLE agents to recommend for order " + id));
-
-        log.debug("Suggestion for order {}: {}", id, result);
+    private ReassignmentSuggestion routeAndPersist(Order order, RoutingContext context) {
+        RoutingResult result = routingService.route(order, context)
+            .orElseThrow(() -> new InvalidStateException("No AVAILABLE agents to recommend for order " + order.getId()));
+        log.debug("Suggestion for order {}: {}", order.getId(), result);
         return suggestionService.createSuggestion(order.getId(), result, TriggerReason.INITIAL);
+    }
+
+    /**
+     * Sends SSE events; once the client has gone away, further sends are dropped
+     * (the suggestion is still persisted, ops asked for it).
+     */
+    private static final class SseSender {
+        private final SseEmitter emitter;
+        private volatile boolean clientGone;
+
+        SseSender(SseEmitter emitter) {
+            this.emitter = emitter;
+            emitter.onError(e -> clientGone = true);
+            emitter.onTimeout(() -> clientGone = true);
+        }
+
+        void send(String event, Object data) {
+            if (clientGone) {
+                return;
+            }
+            try {
+                emitter.send(SseEmitter.event().name(event).data(data, MediaType.APPLICATION_JSON));
+            } catch (IOException | IllegalStateException e) {
+                clientGone = true;
+                log.debug("SSE client disconnected: {}", e.getMessage());
+            }
+        }
     }
 
     /**

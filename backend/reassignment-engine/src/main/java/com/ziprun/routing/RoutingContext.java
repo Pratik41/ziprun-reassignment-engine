@@ -19,26 +19,37 @@ import java.util.Map;
  *
  * pendingLoad: PENDING suggestions already pointing at each agent. Filled in by
  * RoutingService so a batch of stranded orders doesn't all go to one agent.
+ *
+ * listener: receives reasoning as it is generated (SSE endpoint); NONE otherwise.
  */
 public record RoutingContext(
         TriggerReason trigger,
         String failedAgentId,
         String failedAgentName,
         List<Order> strandedOrders,
-        Map<String, Integer> pendingLoad
+        Map<String, Integer> pendingLoad,
+        ReasoningListener listener
 ) {
 
     public static RoutingContext initial() {
-        return new RoutingContext(TriggerReason.INITIAL, null, null, List.of(), Map.of());
+        return new RoutingContext(TriggerReason.INITIAL, null, null, List.of(), Map.of(), ReasoningListener.NONE);
     }
 
     public static RoutingContext agentOffline(String failedAgentId, String failedAgentName, List<Order> strandedOrders) {
         return new RoutingContext(TriggerReason.AGENT_OFFLINE, failedAgentId, failedAgentName,
-            List.copyOf(strandedOrders), Map.of());
+            List.copyOf(strandedOrders), Map.of(), ReasoningListener.NONE);
     }
 
     public RoutingContext withPendingLoad(Map<String, Integer> pendingLoad) {
-        return new RoutingContext(trigger, failedAgentId, failedAgentName, strandedOrders, Map.copyOf(pendingLoad));
+        return new RoutingContext(trigger, failedAgentId, failedAgentName, strandedOrders, Map.copyOf(pendingLoad), listener);
+    }
+
+    public RoutingContext withListener(ReasoningListener listener) {
+        return new RoutingContext(trigger, failedAgentId, failedAgentName, strandedOrders, pendingLoad, listener);
+    }
+
+    public boolean isStreaming() {
+        return listener != ReasoningListener.NONE;
     }
 
     public boolean isRecovery() {

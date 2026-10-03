@@ -110,6 +110,7 @@ public class AIRoutingStrategy implements RoutingStrategy {
                                          String failureKind, String detail) {
         log.warn("AI routing failed for order {} [{}] ({}): {}. Falling back to rule-based.",
             order.getId(), failureKind, context.trigger(), detail);
+        context.listener().restart("AI unavailable (" + failureKind + "), using rule-based routing");
         String source = RuleBasedStrategy.NAME + " (AI fallback: " + failureKind + ")";
         return fallbackStrategy.recommend(order, agents, context).stream()
             .map(result -> result.withSource(source))
