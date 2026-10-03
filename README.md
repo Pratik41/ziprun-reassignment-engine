@@ -78,8 +78,8 @@ All settings are in `application.properties` and can be overridden with environm
 | `LLM_PROVIDERS` | `gemini,groq` | providers tried in order; unconfigured ones are skipped |
 | `GEMINI_API_KEY` (or `LLM_API_KEY`) | none | Gemini key |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | |
-| `GROQ_API_KEY` / `GROQ_MODEL` | none / `llama-3.1-8b-instant` | |
-| `LLM_TIMEOUT_MS` | `8000` | per-provider connect/read timeout |
+| `GROQ_API_KEY` / `GROQ_MODEL` | none / `openai/gpt-oss-20b` | |
+| `LLM_TIMEOUT_MS` | `20000` | per-provider connect/read timeout |
 
 ## How it works
 

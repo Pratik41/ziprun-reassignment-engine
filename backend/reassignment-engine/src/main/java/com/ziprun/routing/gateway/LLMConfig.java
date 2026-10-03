@@ -19,7 +19,7 @@ import java.time.Duration;
 public class LLMConfig {
 
     @Bean
-    public RestClient llmRestClient(@Value("${llm.timeout-ms:8000}") long timeoutMs) {
+    public RestClient llmRestClient(@Value("${llm.timeout-ms:20000}") long timeoutMs) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofMillis(Math.min(timeoutMs, 3000)));
         factory.setReadTimeout(Duration.ofMillis(timeoutMs));
@@ -31,7 +31,7 @@ public class LLMConfig {
             RestClient llmRestClient,
             ObjectMapper objectMapper,
             @Value("${llm.groq.api-key:}") String apiKey,
-            @Value("${llm.groq.model:llama-3.1-8b-instant}") String model,
+            @Value("${llm.groq.model:openai/gpt-oss-20b}") String model,
             @Value("${llm.groq.base-url:https://api.groq.com/openai/v1}") String baseUrl
     ) {
         return new OpenAICompatibleProvider("groq", llmRestClient, objectMapper, baseUrl, model, apiKey, true);

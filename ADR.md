@@ -80,7 +80,7 @@ Option 3. Every failure is an `LLMException` with a `Kind`, handled at the layer
 | Failure | Detected in | Kind | Response |
 |---|---|---|---|
 | No API key for a provider | `LLMGateway` | `NOT_CONFIGURED` | skip to next provider |
-| Slow / hung provider | `LLMConfig` timeouts (`llm.timeout-ms`, default 8s) | `TIMEOUT` | next provider |
+| Slow / hung provider | `LLMConfig` timeouts (`llm.timeout-ms`, default 20s) | `TIMEOUT` | next provider |
 | Quota exhausted (HTTP 429) | `LLMException.fromHttp` | `RATE_LIMITED` | next provider |
 | Other HTTP / network error | `LLMException.fromHttp` | `HTTP_ERROR` | next provider |
 | Empty / blocked reply | provider classes | `EMPTY_RESPONSE` | next provider |
@@ -95,7 +95,7 @@ Option 3. Every failure is an `LLMException` with a `Kind`, handled at the layer
 - **Testing failures on purpose:** the test suite registers a fake provider (`src/test/.../MockLLMProvider`, `llm.mock.fail-mode=timeout|rate-limit|garbage|hallucinate`). It lives only in test code; the application talks to real LLMs only.
 
 **Tradeoffs accepted**  
-- Worst-case latency of the synchronous suggest endpoint is roughly `providers × timeout` (16s with two providers). I chose correctness of the answer over latency here; lowering `llm.timeout-ms` trades the other way.
+- Worst-case latency of the synchronous suggest endpoint is roughly `providers × timeout` (40s with two providers; Gemini usually answers in ~8s, Groq in ~1-2s). I chose correctness of the answer over latency here; lowering `llm.timeout-ms` trades the other way.
 - No retries within a provider: a transient blip moves straight to the next provider or to rule-based.
 - Rule-based reasoning is plainer than the AI's. Ops still gets an actionable suggestion, labelled honestly.
 
