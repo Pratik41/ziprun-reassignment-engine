@@ -3,6 +3,8 @@ package com.ziprun.service.agent;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
 import com.ziprun.domain.event.AgentOfflineEvent;
+import com.ziprun.exception.InvalidStateException;
+import com.ziprun.exception.NotFoundException;
 import com.ziprun.repository.AgentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -15,15 +17,10 @@ import java.util.Optional;
 /**
  * Agent Service Implementation: All agent business logic lives here.
  *
- * Key responsibilities:
- * - Query agents for routing and UI
- * - Update agent status with event publishing
- * - Manage agent workload (order counts)
- *
- * EVENT PUBLISHING (Design Pattern - Agentic Loop Trigger):
+ * EVENT PUBLISHING (Agentic Loop Trigger):
  * When agent status changes to OFFLINE, an AgentOfflineEvent is published.
- * This decouples agent status update (controller/service) from re-planning logic
- * (event handler in T-4). Follows principle in ADR-4.
+ * This decouples the status update (this request) from re-planning
+ * (ReplanEventHandler, async, after commit). See ADR-4.
  *
  * Controller → AgentService → Repository (clean separation)
  * When OFFLINE → AgentService → ApplicationEventPublisher → ReplanEventHandler
@@ -42,20 +39,20 @@ public class AgentServiceImpl implements AgentService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public Optional<Agent> findById(String agentId) {
-        log.debug("Fetching agent: {}", agentId);
         return agentRepository.findById(agentId);
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<Agent> findAll() {
-        log.debug("Fetching all agents");
         return agentRepository.findAll();
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<Agent> findByStatus(AgentStatus status) {
-        log.debug("Fetching agents by status: {}", status);
         return agentRepository.findByStatus(status);
     }
 
@@ -64,48 +61,28 @@ public class AgentServiceImpl implements AgentService {
         log.debug("Updating agent status: id={}, newStatus={}", agentId, newStatus);
 
         Agent agent = agentRepository.findById(agentId)
-            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
+            .orElseThrow(() -> new NotFoundException("Agent", agentId));
 
         AgentStatus oldStatus = agent.getStatus();
         agent.setStatus(newStatus);
-        Agent updated = agentRepository.save(agent);
 
-        // Critical: Publish event if status changes to OFFLINE
-        // This triggers agentic re-planning loop without blocking this request
+        // Critical: Publish event if status changes to OFFLINE.
+        // The listener runs AFTER this transaction commits, on another thread,
+        // so this request returns immediately and the listener sees the committed status.
         if (newStatus == AgentStatus.OFFLINE && oldStatus != AgentStatus.OFFLINE) {
             log.info("Agent going OFFLINE: id={}, name={}. Publishing AgentOfflineEvent.", agentId, agent.getName());
             eventPublisher.publishEvent(new AgentOfflineEvent(this, agentId, agent.getName()));
         }
 
         log.info("Agent status updated: id={}, oldStatus={}, newStatus={}", agentId, oldStatus, newStatus);
-        return updated;
-    }
-
-    @Override
-    public void incrementOrderCount(String agentId) {
-        Agent agent = agentRepository.findById(agentId)
-            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-
-        agent.setActiveOrderCount(agent.getActiveOrderCount() + 1);
-        agentRepository.save(agent);
-
-        log.debug("Agent order count incremented: id={}, newCount={}", agentId, agent.getActiveOrderCount());
-    }
-
-    @Override
-    public void decrementOrderCount(String agentId) {
-        Agent agent = agentRepository.findById(agentId)
-            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + agentId));
-
-        int newCount = Math.max(0, agent.getActiveOrderCount() - 1);
-        agent.setActiveOrderCount(newCount);
-        agentRepository.save(agent);
-
-        log.debug("Agent order count decremented: id={}, newCount={}", agentId, newCount);
+        return agent;
     }
 
     @Override
     public Agent save(Agent agent) {
+        if (agentRepository.existsById(agent.getId())) {
+            throw new InvalidStateException("Agent already exists: " + agent.getId());
+        }
         log.debug("Saving agent: id={}, name={}", agent.getId(), agent.getName());
         return agentRepository.save(agent);
     }

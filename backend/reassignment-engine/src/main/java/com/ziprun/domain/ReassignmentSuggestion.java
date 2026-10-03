@@ -45,7 +45,7 @@ public class ReassignmentSuggestion {
      *   - "Rahul is AVAILABLE and closest to pickup zone"
      *   - "Ananya has capacity; next best alternative given Rahul overloaded"
      */
-    @Column(nullable = false, length = 1000)
+    @Column(nullable = false, length = 2000)
     private String reasoning;
 
     @Column(nullable = false)
@@ -62,6 +62,14 @@ public class ReassignmentSuggestion {
     @Column(nullable = false)
     @Enumerated(EnumType.STRING)
     private TriggerReason triggerReason;
+
+    /**
+     * Which strategy actually produced this suggestion, e.g. "ai", "rule-based",
+     * or "rule-based (AI fallback: TIMEOUT)". Lets ops (and the walkthrough) see
+     * when the AI was bypassed instead of the fallback being invisible.
+     */
+    @Column(nullable = true)
+    private String source;
 
     @Column(nullable = false)
     private LocalDateTime createdAt;
@@ -100,6 +108,9 @@ public class ReassignmentSuggestion {
 
     public TriggerReason getTriggerReason() { return triggerReason; }
     public void setTriggerReason(TriggerReason triggerReason) { this.triggerReason = triggerReason; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

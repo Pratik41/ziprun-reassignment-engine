@@ -1,5 +1,6 @@
 package com.ziprun.domain;
 
+import com.ziprun.exception.InvalidStateException;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -48,6 +49,28 @@ public class Order {
     @Column(nullable = true)
     private String dropoffZone;
 
+    /**
+     * Sprint 3: SLA deadlines
+     * When set, a scheduled SLA monitor can publish a re-plan trigger as the
+     * deadline approaches (see ADR-5). Nullable; unused in Sprint 1.
+     */
+    @Column(nullable = true)
+    private LocalDateTime slaDeadline;
+
+    /**
+     * Moves the order through its state machine; rejects illegal transitions.
+     */
+    public void transitionTo(OrderStatus next) {
+        if (status == next && next == OrderStatus.REASSIGNMENT_PENDING) {
+            return; // already pending: re-plan triggers are idempotent
+        }
+        if (!status.canTransitionTo(next)) {
+            throw new InvalidStateException(
+                String.format("Order %s cannot move from %s to %s", id, status, next));
+        }
+        status = next;
+    }
+
     @PrePersist
     protected void onCreate() {
         if (createdAt == null) {
@@ -79,4 +102,7 @@ public class Order {
 
     public String getDropoffZone() { return dropoffZone; }
     public void setDropoffZone(String dropoffZone) { this.dropoffZone = dropoffZone; }
+
+    public LocalDateTime getSlaDeadline() { return slaDeadline; }
+    public void setSlaDeadline(LocalDateTime slaDeadline) { this.slaDeadline = slaDeadline; }
 }

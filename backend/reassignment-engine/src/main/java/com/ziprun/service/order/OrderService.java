@@ -10,7 +10,7 @@ import java.util.Optional;
  *
  * Separates HTTP concerns (controller) from business logic (service).
  * Controller calls these methods and handles HTTP responses.
- * Service focuses on: order creation, status transitions, querying.
+ * Service focuses on: order creation, status transitions, reassignment, querying.
  */
 public interface OrderService {
 
@@ -18,65 +18,48 @@ public interface OrderService {
      * Create a new order pre-assigned to an agent.
      * Simulates morning manual assignment workflow.
      *
-     * @param description order description/type
-     * @param assignedAgentId agent to assign order to
-     * @return created order
-     * @throws IllegalArgumentException if agent doesn't exist or is OFFLINE
+     * @throws com.ziprun.exception.NotFoundException if the agent doesn't exist
+     * @throws com.ziprun.exception.InvalidStateException if the agent is OFFLINE
      */
     Order createOrder(String description, String assignedAgentId);
 
-    /**
-     * Find order by ID.
-     *
-     * @param orderId order identifier
-     * @return order if found
-     */
     Optional<Order> findById(String orderId);
 
     /**
-     * List all orders.
-     *
-     * @return all orders
+     * @throws com.ziprun.exception.NotFoundException if the order doesn't exist
      */
+    Order getById(String orderId);
+
     List<Order> findAll();
 
-    /**
-     * List orders by status.
-     * Used by UI to fetch pending reassignments, assigned orders, etc.
-     *
-     * @param status order status to filter by
-     * @return orders matching status
-     */
     List<Order> findByStatus(OrderStatus status);
 
     /**
-     * Update order status.
-     * Validates state transitions (e.g., can't go from DELIVERED back to ASSIGNED).
+     * Update order status, enforcing the OrderStatus state machine.
+     * Moving to DELIVERED releases the agent's load.
      *
-     * @param orderId order to update
-     * @param newStatus new status
-     * @return updated order
-     * @throws IllegalArgumentException if order not found or invalid transition
+     * @throws com.ziprun.exception.InvalidStateException on an illegal transition
      */
     Order updateStatus(String orderId, OrderStatus newStatus);
 
     /**
-     * Find all orders assigned to an agent.
-     * Used by agentic loop when agent goes offline.
-     *
-     * @param agentId agent identifier
-     * @return all orders currently assigned to this agent
+     * Orders the agent still owns (ASSIGNED, REASSIGNED, REASSIGNMENT_PENDING).
+     * Used by the agentic loop when the agent goes offline.
      */
-    List<Order> findByAssignedAgentId(String agentId);
+    List<Order> findActiveOrdersForAgent(String agentId);
 
     /**
-     * Manually reassign an order to a different agent.
-     * Used by ops when they override AI suggestion.
+     * Flag an order as stranded. Idempotent: already-pending orders are left as-is.
+     */
+    Order markReassignmentPending(String orderId);
+
+    /**
+     * Move an order to a new agent: releases the old agent's load, adds to the
+     * new agent's load, sets status REASSIGNED. Used when ops accepts a
+     * suggestion and for manual overrides.
      *
-     * @param orderId order to reassign
-     * @param newAgentId new agent ID
-     * @return updated order with REASSIGNED status
-     * @throws IllegalArgumentException if order not found
+     * @throws com.ziprun.exception.InvalidStateException if the order is DELIVERED,
+     *         the new agent is OFFLINE, or it's the same agent
      */
     Order reassignToAgent(String orderId, String newAgentId);
 }

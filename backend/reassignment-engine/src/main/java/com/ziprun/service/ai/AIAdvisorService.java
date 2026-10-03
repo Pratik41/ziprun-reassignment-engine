@@ -1,27 +1,31 @@
 package com.ziprun.service.ai;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.Order;
+import com.ziprun.routing.RoutingContext;
+import com.ziprun.routing.gateway.LLMException;
 import com.ziprun.routing.gateway.LLMGateway;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
 import java.util.List;
 
 /**
- * AI Advisory Service: orchestrates LLM calls for routing recommendations.
+ * AI Advisory Service: "what does the AI say?"
  *
  * Responsibilities:
- * - Build context-appropriate prompts (initial vs re-plan)
- * - Call LLM via gateway
- * - Parse and validate LLM response
- * - Handle failures gracefully
- * - Log at appropriate levels for debugging
+ * - Pick the prompt for the situation (initial assignment vs recovery re-plan)
+ * - Call the LLM gateway (which handles provider fallback and timeouts)
+ * - Parse the reply into AIRecommendationOptions
  *
- * This keeps AI logic separate from routing strategy logic:
- * - AIAdvisorService: "What does the AI say?"
- * - AIRoutingStrategy: "How do we use that advice?"
+ * Failures are thrown as typed LLMExceptions, never swallowed into null, so the
+ * caller (AIRoutingStrategy) can log the exact failure mode and fall back.
+ * Whether the recommended agent actually exists is checked by the strategy,
+ * which owns the roster it passed in.
  */
 @Service
 public class AIAdvisorService {
@@ -36,159 +40,76 @@ public class AIAdvisorService {
     }
 
     /**
-     * Suggest an agent for an order using the LLM.
-     * Used for initial assignments via POST /orders/{id}/suggest.
-     *
-     * @return AIRecommendation with agent choice and reasoning, or null on failure
+     * @throws LLMException if every provider fails or the reply can't be parsed
      */
-    public AIRecommendation suggestAgent(Order order, List<Agent> availableAgents) {
-        try {
-            String prompt = PromptBuilder.buildInitialAssignmentPrompt(order, availableAgents);
-            return callLLMAndParse(prompt, order.getId(), "initial");
+    public AIRecommendation advise(Order order, List<Agent> availableAgents, RoutingContext context) {
+        String prompt = context.isRecovery()
+            ? PromptBuilder.buildReplanPrompt(order, availableAgents, context)
+            : PromptBuilder.buildInitialAssignmentPrompt(order, availableAgents, context);
+        log.debug("{} prompt for order {}:\n{}", context.isRecovery() ? "Re-plan" : "Initial", order.getId(), prompt);
 
-        } catch (Exception e) {
-            log.error("Failed to get AI suggestion for order {}", order.getId(), e);
-            return null;
-        }
+        LLMGateway.LLMReply reply = llmGateway.callLLM(prompt);
+        List<AIRecommendationOption> options = parse(reply.text());
+        log.debug("LLM ({}) returned {} option(s) for order {}", reply.provider(), options.size(), order.getId());
+        return new AIRecommendation(reply.provider(), options);
     }
 
     /**
-     * Suggest reassignment for an order when original agent went offline.
-     * Used by agentic re-planning loop in T-4.
-     *
-     * @param strandedOrderCount total number of orders affected by the agent failure
-     * @return AIRecommendation for recovery, or null on failure
+     * Accepts either {"recommendations":[{...},...]} (what we ask for) or a single
+     * {"agent_id"|"agentId", "confidence", "reasoning"} object (the brief's format),
+     * optionally wrapped in markdown fences or surrounded by prose.
      */
-    public AIRecommendation suggestReassignment(
-            Order order,
-            List<Agent> availableAgents,
-            String failedAgentId,
-            String failedAgentName,
-            int strandedOrderCount
-    ) {
+    List<AIRecommendationOption> parse(String raw) {
+        JsonNode root;
         try {
-            String prompt = PromptBuilder.buildReplanPrompt(
-                order,
-                availableAgents,
-                failedAgentId,
-                failedAgentName,
-                strandedOrderCount
-            );
-            return callLLMAndParse(prompt, order.getId(), "replan");
-
+            root = objectMapper.readTree(extractJsonObject(raw));
         } catch (Exception e) {
-            log.error("Failed to get AI replan suggestion for order {}", order.getId(), e);
-            return null;
+            throw new LLMException(LLMException.Kind.UNPARSEABLE, "LLM reply is not JSON: " + abbreviate(raw), e);
         }
+
+        List<JsonNode> items = new ArrayList<>();
+        if (root.has("recommendations") && root.get("recommendations").isArray()) {
+            root.get("recommendations").forEach(items::add);
+        } else {
+            items.add(root);
+        }
+
+        List<AIRecommendationOption> options = new ArrayList<>();
+        for (JsonNode item : items) {
+            String agentId = text(item, "agent_id", "agentId");
+            JsonNode confidence = item.get("confidence");
+            options.add(new AIRecommendationOption(
+                agentId,
+                confidence != null && confidence.isNumber() ? confidence.asDouble() : null,
+                text(item, "reasoning")
+            ));
+        }
+        if (options.stream().allMatch(o -> o.agentId() == null)) {
+            throw new LLMException(LLMException.Kind.UNPARSEABLE, "LLM JSON has no agent_id: " + abbreviate(raw));
+        }
+        return options;
     }
 
-    /**
-     * Internal: Call LLM, parse response, validate structure.
-     */
-    private AIRecommendation callLLMAndParse(String prompt, String orderId, String context) {
-        try {
-            String rawResponse = llmGateway.callLLM(prompt);
-
-            if (rawResponse == null || rawResponse.trim().isEmpty()) {
-                log.warn("LLM returned empty response for order {} ({})", orderId, context);
-                return null;
-            }
-
-            LLMResponse parsed = parseResponse(rawResponse);
-
-            if (parsed == null) {
-                log.warn("Failed to parse LLM response for order {} ({}). Raw: {}", orderId, context, rawResponse);
-                return null;
-            }
-
-            log.debug(
-                "LLM parsed successfully for order {} ({}): {}",
-                orderId,
-                context,
-                parsed
-            );
-
-            return AIRecommendation.of(
-                parsed.getAgentId(),
-                parsed.getConfidence(),
-                parsed.getReasoning()
-            );
-
-        } catch (Exception e) {
-            log.error("LLM call failed for order {} ({})", orderId, context, e);
-            return null;
+    private static String extractJsonObject(String raw) {
+        int start = raw.indexOf('{');
+        int end = raw.lastIndexOf('}');
+        if (start < 0 || end <= start) {
+            throw new IllegalArgumentException("no JSON object found");
         }
+        return raw.substring(start, end + 1);
     }
 
-    /**
-     * Parse LLM response as JSON - handles both single and multiple recommendations.
-     * Tries multiple recommendations first (top 3 agents), falls back to single if that fails.
-     *
-     * @return AIRecommendation with single or multiple options, or null if parsing fails
-     */
-    private LLMResponse parseResponse(String rawResponse) {
-        try {
-            String trimmed = cleanJsonResponse(rawResponse);
-
-            // Try parsing as multiple recommendations first
-            try {
-                LLMMultipleRecommendationsResponse multiResp = objectMapper.readValue(
-                    trimmed,
-                    LLMMultipleRecommendationsResponse.class
-                );
-
-                if (multiResp.getRecommendations() != null && !multiResp.getRecommendations().isEmpty()) {
-                    log.debug("Parsed multiple recommendations: {}", multiResp.getRecommendations().size());
-                    // Return the first one as primary, but we'll handle the list separately
-                    // For now, return first as LLMResponse (backward compatible)
-                    var first = multiResp.getRecommendations().get(0);
-                    return new LLMResponse(first.getAgentId(), first.getConfidence(), first.getReasoning());
-                }
-            } catch (Exception e) {
-                log.debug("Multiple recommendations parsing failed, trying single recommendation");
+    private static String text(JsonNode node, String... fieldNames) {
+        for (String field : fieldNames) {
+            JsonNode value = node.get(field);
+            if (value != null && value.isTextual() && !value.asText().isBlank()) {
+                return value.asText().trim();
             }
-
-            // Fall back to single recommendation format
-            LLMResponse response = objectMapper.readValue(trimmed, LLMResponse.class);
-
-            // Validate required fields
-            if (response.getAgentId() == null || response.getAgentId().isBlank()) {
-                log.warn("LLM response missing agent_id");
-                return null;
-            }
-
-            if (response.getConfidence() == null) {
-                log.warn("LLM response missing confidence");
-                return null;
-            }
-
-            if (response.getReasoning() == null || response.getReasoning().isBlank()) {
-                log.warn("LLM response missing reasoning");
-                return null;
-            }
-
-            return response;
-
-        } catch (Exception e) {
-            log.debug("LLM response parsing failed: {}", e.getMessage());
-            return null;
         }
+        return null;
     }
 
-    private String cleanJsonResponse(String rawResponse) {
-        String trimmed = rawResponse.trim();
-
-        // Extract JSON if response contains markdown code blocks
-        if (trimmed.startsWith("```json")) {
-            trimmed = trimmed.substring(7);
-        } else if (trimmed.startsWith("```")) {
-            trimmed = trimmed.substring(3);
-        }
-
-        if (trimmed.endsWith("```")) {
-            trimmed = trimmed.substring(0, trimmed.length() - 3);
-        }
-
-        return trimmed.trim();
+    private static String abbreviate(String s) {
+        return s.length() <= 200 ? s : s.substring(0, 200) + "...";
     }
 }

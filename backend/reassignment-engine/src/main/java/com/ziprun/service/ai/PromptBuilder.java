@@ -2,167 +2,125 @@ package com.ziprun.service.ai;
 
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.Order;
+import com.ziprun.routing.RoutingContext;
 import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Builds AI prompts for routing decisions.
+ * Builds AI prompts for routing decisions (see ADR-7).
  *
- * Key insight from ADR-7: Initial assignment and re-plan after agent offline
- * are fundamentally different scenarios. This builder creates distinctly
- * different prompts tailored to each situation.
+ * The two prompts are written for two different situations, not one template
+ * with a flag:
  *
- * Initial prompt: "Which agent should take this order?"
- * Re-plan prompt: "This agent failed. These orders are stranded. Recover them."
+ *  Initial  - routine request from ops. Goal: a sensible, balanced assignment.
+ *             Framing: "recommend an agent for this order".
+ *
+ *  Re-plan  - an incident report. Who failed, that their assignments are void,
+ *             the full list of stranded orders in this batch, which of them is
+ *             being decided now, and recovery priorities (speed, spreading the
+ *             batch, flagging a thin roster).
+ *
+ * Both share the same roster table and output schema so parsing and
+ * validation stay identical.
  */
-public class PromptBuilder {
+public final class PromptBuilder {
 
-    public static String buildInitialAssignmentPrompt(Order order, List<Agent> availableAgents) {
-        return String.format(
-            """
-            You are an AI assignment engine for a delivery platform.
-
-            TASK: Assign THIS SPECIFIC order to the best available agent.
-
-            ORDER DETAILS:
-            - Order ID: %s
-            - Description: %s
-            - Priority: NORMAL
-
-            AVAILABLE AGENTS (with current workload):
-            %s
-
-            *** CRITICAL: UNIQUE REASONING FOR EACH ORDER ***
-            For order %s (%s) specifically:
-            1. Which agent can handle this best?
-            2. What is their current load?
-            3. Why them over others?
-            4. Any trade-offs?
-
-            REASONING FORMAT (MUST be UNIQUE per order - not template text):
-            Format: "For %s (%s): [Agent Name] has [load details]. Better than [other agent] because [reason]. Trade-off: [explanation]."
-
-            Example of GOOD unique reasoning:
-            "For ORD-456 (Electronics): Vikram has 2 active orders (lowest). Better than Raj (4) or Amit (6) because lowest load. Trade-off: none available."
-
-            Example of BAD generic reasoning (DO NOT DO THIS):
-            "Assigned because agent has low load and other agents available."
-
-            RESPONSE FORMAT (must be valid JSON):
-            {
-              "agent_id": "AGT-XXXX",
-              "confidence": 0.85,
-              "reasoning": "For %s (%s): [Agent Name] has X active orders. Chosen over [other agents] because [specific reason for THIS order]."
-            }
-
-            CRITICAL RULES:
-            - reasoning MUST START with "For %s"
-            - reasoning MUST include ORDER ID (%s)
-            - reasoning MUST include ORDER DESCRIPTION (%s)
-            - reasoning MUST compare with at least 1 other agent by name
-            - reasoning MUST mention load/capacity numbers
-            - reasoning MUST be DIFFERENT for each order (not copy-paste)
-            - DO NOT use generic/template text
-
-            Return ONLY the JSON response, no other text.
-            """,
-            order.getId(),
-            order.getDescription(),
-            formatAgentRoster(availableAgents),
-            order.getId(),
-            order.getDescription(),
-            order.getId(),
-            order.getDescription(),
-            order.getId(),
-            order.getDescription(),
-            order.getId(),
-            order.getDescription()
-        );
+    private PromptBuilder() {
     }
 
-    public static String buildReplanPrompt(
-            Order order,
-            List<Agent> availableAgents,
-            String failedAgentId,
-            String failedAgentName,
-            int strandedOrderCount
-    ) {
-        return String.format(
-            """
-            ALERT: Agent offline. Recovery routing in progress.
+    private static final String OUTPUT_CONTRACT = """
+        OUTPUT FORMAT
+        Respond with JSON only: no markdown fences, no text before or after it.
+        {"recommendations":[{"agent_id":"<id copied exactly from the table>","confidence":<number 0.0-1.0>,"reasoning":"<1-3 sentences>"}]}
+        - Rank up to 3 agents, best first.
+        - agent_id MUST be one of the ids in the AVAILABLE AGENTS table. Never invent an id.
+        - confidence: 0.85-1.0 when one agent is clearly best; 0.6-0.85 when candidates are close; below 0.6 when you are unsure.
+        - reasoning is shown verbatim to an operations manager deciding whether to accept. Name the agent, cite the load numbers, and state the trade-off. Do not invent facts (location, rating, vehicle) that are not in this prompt.
+        """;
 
-            SITUATION:
-            - Offline Agent: '%s' (ID: %s)
-            - Total Stranded Orders: %d
-            - THIS IS ORDER: %s (Description: %s)
+    public static String buildInitialAssignmentPrompt(Order order, List<Agent> availableAgents, RoutingContext context) {
+        return """
+            You are the dispatch advisor for ZipRun, a same-day delivery fleet.
+            An operations manager has asked for a routing recommendation for one order.
 
-            AVAILABLE AGENTS FOR REASSIGNMENT:
+            SITUATION: routine assignment request. Nothing has failed; aim for a balanced fleet.
+
+            ORDER
             %s
 
-            *** PROVIDE TOP 3 RECOMMENDATIONS (not just one) ***
-            For order %s (%s), rank the TOP 3 best agents:
-            1. Best choice and why
-            2. Second best (alternative)
-            3. Third best (backup)
+            AVAILABLE AGENTS
+            "active" = orders they are carrying now; "pending" = suggestions already queued for them; "effective" = active + pending.
+            %s
 
-            Each must include: agent name, load, unique reasoning.
+            HOW TO DECIDE
+            1. Prefer the agent with the lowest effective load: fewer orders ahead means a faster pickup.
+            2. Use the order description where it matters (fragile, perishable, documents), but only with facts given here.
+            3. If two agents are tied, say so and lower your confidence.
 
-            RESPONSE FORMAT (must be valid JSON with 3 recommendations):
-            {
-              "recommendations": [
-                {
-                  "agent_id": "AGT-A",
-                  "confidence": 0.92,
-                  "reasoning": "For %s (%s): [Name] has X orders. Best because [specific reason]."
-                },
-                {
-                  "agent_id": "AGT-B",
-                  "confidence": 0.85,
-                  "reasoning": "For %s (%s): [Name] has Y orders. Second because [specific reason]."
-                },
-                {
-                  "agent_id": "AGT-C",
-                  "confidence": 0.78,
-                  "reasoning": "For %s (%s): [Name] has Z orders. Third because [specific reason]."
-                }
-              ]
-            }
-
-            CRITICAL RULES:
-            - Provide EXACTLY 3 different agents (top 3 options)
-            - Each reasoning MUST mention load numbers
-            - Each reasoning MUST be UNIQUE and explain WHY different from others
-            - Confidence: 0.92 → 0.85 → 0.78
-            - DO NOT use generic/template text
-            - Each should start with "For %s"
-
-            Return ONLY the JSON response, no other text.
-            """,
-            failedAgentName,
-            failedAgentId,
-            strandedOrderCount,
-            order.getId(),
-            order.getDescription(),
-            formatAgentRoster(availableAgents),
-            order.getId(),
-            order.getId(),
-            order.getId(),
-            order.getDescription(),
-            order.getId(),
-            order.getId(),
-            order.getDescription()
-        );
+            %s""".formatted(describeOrder(order), formatAgentRoster(availableAgents, context), OUTPUT_CONTRACT);
     }
 
-    private static String formatAgentRoster(List<Agent> agents) {
-        return agents.stream()
-            .map(agent -> String.format(
-                "- %s (ID: %s, Status: %s, Active Orders: %d)",
-                agent.getName(),
-                agent.getId(),
-                agent.getStatus(),
-                agent.getActiveOrderCount()
-            ))
+    public static String buildReplanPrompt(Order order, List<Agent> availableAgents, RoutingContext context) {
+        return """
+            You are the dispatch advisor for ZipRun, a same-day delivery fleet.
+            This is a RECOVERY situation, not a routine assignment.
+
+            INCIDENT REPORT
+            - Agent %s (%s) has gone OFFLINE mid-shift. Every order assigned to them is now void: they will not pick up or deliver anything.
+            - %d order(s) are stranded and are being re-planned one at a time in this batch:
+            %s
+            - Suggestions already queued for earlier orders in this batch appear in the "pending" column below, so you can see where they are heading.
+
+            ORDER TO RECOVER NOW
+            %s
+
+            AVAILABLE AGENTS (the offline agent is excluded)
+            "active" = orders they are carrying now; "pending" = suggestions already queued for them; "effective" = active + pending.
+            %s
+
+            RECOVERY PRIORITIES
+            1. Speed: this order is already delayed. Prefer the agent who can start soonest (lowest effective load).
+            2. Spread the batch: avoid stacking several stranded orders on one agent when a comparable alternative exists.
+            3. Thin roster: if there are fewer available agents than stranded orders, say so in the reasoning and lower confidence. Ops may need to call in extra capacity.
+            4. Start the reasoning by naming this as a recovery from %s going offline.
+
+            %s""".formatted(
+                context.failedAgentName(), context.failedAgentId(),
+                context.strandedOrderCount(), formatStrandedBatch(order, context),
+                describeOrder(order),
+                formatAgentRoster(availableAgents, context),
+                context.failedAgentName(),
+                OUTPUT_CONTRACT);
+    }
+
+    private static String describeOrder(Order order) {
+        StringBuilder sb = new StringBuilder()
+            .append("- id: ").append(order.getId()).append('\n')
+            .append("- description: ").append(order.getDescription()).append('\n')
+            .append("- currently assigned to: ").append(order.getAssignedAgentId());
+        if (order.getPickupZone() != null || order.getDropoffZone() != null) {
+            sb.append('\n').append("- zones: ").append(order.getPickupZone()).append(" -> ").append(order.getDropoffZone());
+        }
+        return sb.toString();
+    }
+
+    private static String formatStrandedBatch(Order current, RoutingContext context) {
+        return context.strandedOrders().stream()
+            .map(o -> "  * " + o.getId() + " - " + o.getDescription()
+                + (o.getId().equals(current.getId()) ? "   <- THIS ORDER" : ""))
             .collect(Collectors.joining("\n"));
+    }
+
+    static String formatAgentRoster(List<Agent> agents, RoutingContext context) {
+        String header = "| id | name | active | pending | effective |\n|----|------|--------|---------|-----------|";
+        String rows = agents.stream()
+            .map(agent -> String.format("| %s | %s | %d | %d | %d |",
+                agent.getId(),
+                agent.getName(),
+                agent.getActiveOrderCount(),
+                context.pendingFor(agent),
+                context.effectiveLoad(agent)))
+            .collect(Collectors.joining("\n"));
+        return header + "\n" + rows;
     }
 }

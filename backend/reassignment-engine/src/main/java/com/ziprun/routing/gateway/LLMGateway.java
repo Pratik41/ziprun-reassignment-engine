@@ -4,192 +4,81 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientException;
+
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 /**
- * LLM Gateway: Abstraction over HTTP communication with LLM providers.
+ * LLM Gateway: calls providers in the order configured by llm.providers
+ * (e.g. "gemini,groq") and returns the first successful reply.
  *
- * Supports: Gemini, Groq (OpenAI-compatible), Ollama
+ * Transport failures (timeout, 429, HTTP error, empty reply, missing key) move
+ * on to the next provider. If every provider fails, the last LLMException is
+ * thrown and the AI strategy falls back to rule-based routing.
  *
- * Responsibilities:
- * - Handle provider-specific request/response formatting
- * - Manage API authentication
- * - Parse provider responses into uniform String
- * - Propagate errors to caller (AIAdvisorService handles fallback)
- *
- * Configuration via application.properties:
- *   llm.provider = gemini | groq | ollama
- *   llm.api-key = ${LLM_API_KEY}
- *   llm.model = model-name
- *   llm.base-url = provider-url
+ * Content problems (bad JSON, hallucinated agent) are NOT retried on another
+ * provider: they surface to the AI strategy, which validates and falls back.
  */
 @Component
-public class LLMGateway implements LLMProvider {
+public class LLMGateway {
     private static final Logger log = LoggerFactory.getLogger(LLMGateway.class);
 
-    @Value("${llm.provider}")
-    private String provider;
-
-    @Value("${llm.api-key:}")
-    private String apiKey;
-
-    @Value("${llm.model}")
-    private String model;
-
-    @Value("${llm.base-url}")
-    private String baseUrl;
-
-    private final RestClient http = RestClient.create();
-
-    @Override
-    public String getName() {
-        return provider + "-llm";
+    /** Raw model text plus which provider produced it. */
+    public record LLMReply(String provider, String text) {
     }
 
-    /**
-     * Call the LLM with a prompt.
-     *
-     * @param prompt the user prompt
-     * @return the LLM's text response
-     * @throws RestClientException if HTTP call fails
-     * @throws RuntimeException if response parsing fails
-     */
-    @Override
-    public String callLLM(String prompt) {
-        log.debug("Calling LLM via provider: {}", provider);
+    private final List<LLMProvider> chain;
 
-        return switch (provider.toLowerCase()) {
-            case "gemini" -> callGemini(prompt);
-            case "groq" -> callOpenAICompatible(prompt, baseUrl + "/openai/v1/chat/completions");
-            case "ollama" -> callOpenAICompatible(prompt, baseUrl + "/v1/chat/completions");
-            default -> throw new IllegalStateException("Unknown LLM provider: " + provider);
-        };
-    }
+    public LLMGateway(List<LLMProvider> providers, @Value("${llm.providers:gemini}") String providerOrder) {
+        Map<String, LLMProvider> byName = providers.stream()
+            .collect(Collectors.toMap(LLMProvider::getName, Function.identity()));
 
-    /**
-     * Call Google Gemini API.
-     */
-    private String callGemini(String prompt) {
-        String url = baseUrl + "/" + model + ":generateContent?key=" + apiKey;
-
-        Map<String, Object> body = Map.of(
-            "contents", List.of(
-                Map.of("parts", List.of(
-                    Map.of("text", prompt)
-                ))
-            )
-        );
-
-        try {
-            Map<?, ?> response = http.post()
-                .uri(url)
-                .header("Content-Type", "application/json")
-                .body(body)
-                .retrieve()
-                .body(Map.class);
-
-            if (response == null) {
-                throw new RuntimeException("Gemini returned null response");
+        List<LLMProvider> ordered = new ArrayList<>();
+        for (String name : Arrays.stream(providerOrder.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList()) {
+            LLMProvider provider = byName.get(name);
+            if (provider == null) {
+                throw new IllegalStateException(String.format(
+                    "llm.providers contains unknown provider '%s'. Known: %s", name, byName.keySet()));
             }
-
-            @SuppressWarnings("unchecked")
-            List<Object> candidates = (List<Object>) response.get("candidates");
-            if (candidates == null || candidates.isEmpty()) {
-                throw new RuntimeException("Gemini response missing candidates");
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<Object, Object> content = (Map<Object, Object>) candidates.get(0);
-            if (content == null) {
-                throw new RuntimeException("Gemini candidate missing content");
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<Object, Object> contentMap = (Map<Object, Object>) content.get("content");
-            if (contentMap == null) {
-                throw new RuntimeException("Gemini content missing content map");
-            }
-
-            @SuppressWarnings("unchecked")
-            List<Object> parts = (List<Object>) contentMap.get("parts");
-            if (parts == null || parts.isEmpty()) {
-                throw new RuntimeException("Gemini response missing parts");
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<Object, Object> part = (Map<Object, Object>) parts.get(0);
-            Object text = part.get("text");
-
-            if (text == null) {
-                throw new RuntimeException("Gemini response missing text");
-            }
-
-            return text.toString();
-
-        } catch (Exception e) {
-            log.error("Gemini API call failed", e);
-            throw new RuntimeException("Gemini API error: " + e.getMessage(), e);
+            ordered.add(provider);
         }
+        this.chain = List.copyOf(ordered);
+
+        log.info("LLM provider chain: {}", chain.stream()
+            .map(p -> p.getName() + (p.isConfigured() ? "" : " (not configured, will be skipped)"))
+            .toList());
     }
 
-    /**
-     * Call OpenAI-compatible API (Groq or Ollama).
-     */
-    private String callOpenAICompatible(String prompt, String url) {
-        Map<String, Object> body = Map.of(
-            "model", model,
-            "messages", List.of(
-                Map.of(
-                    "role", "user",
-                    "content", prompt
-                )
-            )
-        );
+    public LLMReply callLLM(String prompt) {
+        LLMException last = new LLMException(LLMException.Kind.NOT_CONFIGURED, "No LLM provider configured");
 
-        try {
-            Map<?, ?> response = http.post()
-                .uri(url)
-                .header("Content-Type", "application/json")
-                .header("Authorization", "Bearer " + apiKey)
-                .body(body)
-                .retrieve()
-                .body(Map.class);
-
-            if (response == null) {
-                throw new RuntimeException("LLM returned null response");
+        for (LLMProvider provider : chain) {
+            if (!provider.isConfigured()) {
+                last = new LLMException(LLMException.Kind.NOT_CONFIGURED, provider.getName() + " has no API key/URL");
+                continue;
             }
-
-            @SuppressWarnings("unchecked")
-            List<Object> choices = (List<Object>) response.get("choices");
-            if (choices == null || choices.isEmpty()) {
-                throw new RuntimeException("LLM response missing choices");
+            try {
+                long start = System.currentTimeMillis();
+                String text = provider.callLLM(prompt);
+                log.debug("LLM provider {} answered in {} ms", provider.getName(), System.currentTimeMillis() - start);
+                return new LLMReply(provider.getName(), text);
+            } catch (LLMException e) {
+                log.warn("LLM provider {} failed [{}]: {}. Trying next provider.",
+                    provider.getName(), e.getKind(), e.getMessage());
+                last = e;
+            } catch (RuntimeException e) {
+                log.warn("LLM provider {} failed unexpectedly: {}. Trying next provider.", provider.getName(), e.toString());
+                last = new LLMException(LLMException.Kind.HTTP_ERROR, provider.getName() + " failed: " + e.getMessage(), e);
             }
-
-            @SuppressWarnings("unchecked")
-            Map<Object, Object> choice = (Map<Object, Object>) choices.get(0);
-            if (choice == null) {
-                throw new RuntimeException("LLM choice is null");
-            }
-
-            @SuppressWarnings("unchecked")
-            Map<Object, Object> message = (Map<Object, Object>) choice.get("message");
-            if (message == null) {
-                throw new RuntimeException("LLM choice missing message");
-            }
-
-            Object content = message.get("content");
-            if (content == null) {
-                throw new RuntimeException("LLM message missing content");
-            }
-
-            return content.toString();
-
-        } catch (Exception e) {
-            log.error("OpenAI-compatible API call failed", e);
-            throw new RuntimeException("LLM API error: " + e.getMessage(), e);
         }
+        throw last;
+    }
+
+    public List<String> getProviderNames() {
+        return chain.stream().map(LLMProvider::getName).toList();
     }
 }

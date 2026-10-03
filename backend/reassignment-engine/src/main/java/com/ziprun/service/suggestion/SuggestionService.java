@@ -2,6 +2,8 @@ package com.ziprun.service.suggestion;
 
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
+import com.ziprun.domain.TriggerReason;
+import com.ziprun.routing.RoutingResult;
 import java.util.List;
 import java.util.Optional;
 
@@ -9,73 +11,50 @@ import java.util.Optional;
  * Suggestion Service Interface: Business logic for reassignment suggestions.
  *
  * Manages suggestion lifecycle:
- * - Create (by routing engine or agentic loop)
+ * - Create (by the HTTP suggest endpoint or the agentic loop)
  * - Query (by UI for ops approval)
- * - Update (when ops accepts/rejects)
+ * - Decide (ops accepts/rejects; accepting reassigns the order) - the human checkpoint
  * - Idempotency checks (prevent duplicate re-plans)
  */
 public interface SuggestionService {
 
     /**
-     * Create a reassignment suggestion.
-     * Called by routing engine after LLM/rule-based decision.
-     *
-     * @param suggestion suggestion to persist
-     * @return created suggestion
+     * Persist a PENDING suggestion built from a routing result.
      */
-    ReassignmentSuggestion createSuggestion(ReassignmentSuggestion suggestion);
+    ReassignmentSuggestion createSuggestion(String orderId, RoutingResult result, TriggerReason triggerReason);
 
     /**
-     * Find suggestion by ID.
+     * Agentic-loop variant: creates an AGENT_OFFLINE suggestion unless one is
+     * already PENDING for the order. The check and the insert run under a row
+     * lock on the order, so two concurrent re-plans can't both insert.
      *
-     * @param suggestionId suggestion identifier
-     * @return suggestion if found
+     * @return the new suggestion, or empty if one already existed
      */
+    Optional<ReassignmentSuggestion> createReplanSuggestionIfAbsent(String orderId, RoutingResult result);
+
     Optional<ReassignmentSuggestion> findById(String suggestionId);
 
-    /**
-     * Find all suggestions.
-     *
-     * @return all suggestions
-     */
     List<ReassignmentSuggestion> findAll();
 
-    /**
-     * Find suggestions by status.
-     * UI calls this to show pending reassignments.
-     *
-     * @param status suggestion status (PENDING, ACCEPTED, REJECTED)
-     * @return suggestions matching status
-     */
     List<ReassignmentSuggestion> findByStatus(SuggestionStatus status);
 
-    /**
-     * Find suggestions for a specific order.
-     * Used to check if order already has a pending suggestion.
-     *
-     * @param orderId order identifier
-     * @return suggestions for this order
-     */
     List<ReassignmentSuggestion> findByOrderId(String orderId);
 
     /**
-     * Update suggestion status (ops approval/rejection).
-     * Transitions PENDING → ACCEPTED or REJECTED.
+     * Ops decision on a PENDING suggestion.
+     * ACCEPTED: reassigns the order to the recommended agent and rejects any
+     *           other PENDING suggestions for that order, in one transaction.
+     * REJECTED: marks the suggestion; the order stays REASSIGNMENT_PENDING so
+     *           ops can request another suggestion or reassign manually.
      *
-     * @param suggestionId suggestion to update
-     * @param newStatus ACCEPTED or REJECTED
-     * @return updated suggestion
-     * @throws IllegalArgumentException if suggestion not found
+     * @throws com.ziprun.exception.NotFoundException if the suggestion doesn't exist
+     * @throws com.ziprun.exception.InvalidStateException if not PENDING, or the
+     *         recommended agent has since gone OFFLINE
      */
     ReassignmentSuggestion updateStatus(String suggestionId, SuggestionStatus newStatus);
 
     /**
-     * Check if order already has a pending offline re-plan suggestion.
-     * Used for idempotency: prevent duplicate suggestions when same agent
-     * goes offline twice or when multiple agents fail simultaneously.
-     *
-     * @param orderId order to check
-     * @return true if pending AGENT_OFFLINE suggestion exists
+     * True if a PENDING suggestion with triggerReason=AGENT_OFFLINE exists for the order.
      */
     boolean hasPendingOfflineSuggestion(String orderId);
 }

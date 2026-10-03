@@ -1,44 +1,47 @@
 package com.ziprun.routing;
 
+/**
+ * One ranked recommendation from a routing strategy.
+ *
+ * source records which strategy really produced it ("ai:gemini", "rule-based",
+ * "rule-based (AI fallback: TIMEOUT)") so a fallback is visible to ops rather
+ * than silently masquerading as an AI answer.
+ */
 public class RoutingResult {
-    private String recommendedAgentId;
-    private Double confidence;
-    private String reasoning;
+    private final String recommendedAgentId;
+    private final Double confidence;
+    private final String reasoning;
+    private final String source;
 
-    public RoutingResult() {
-    }
-
-    public RoutingResult(String recommendedAgentId, Double confidence, String reasoning) {
+    public RoutingResult(String recommendedAgentId, Double confidence, String reasoning, String source) {
         this.recommendedAgentId = recommendedAgentId;
         this.confidence = confidence;
         this.reasoning = reasoning;
+        this.source = source;
     }
 
     public String getRecommendedAgentId() {
         return recommendedAgentId;
     }
 
-    public void setRecommendedAgentId(String recommendedAgentId) {
-        this.recommendedAgentId = recommendedAgentId;
-    }
-
     public Double getConfidence() {
         return confidence;
-    }
-
-    public void setConfidence(Double confidence) {
-        this.confidence = confidence;
     }
 
     public String getReasoning() {
         return reasoning;
     }
 
-    public void setReasoning(String reasoning) {
-        this.reasoning = reasoning;
+    public String getSource() {
+        return source;
     }
 
-    public static RoutingResult of(String agentId, Double confidence, String reasoning) {
-        return new RoutingResult(agentId, confidence, reasoning);
+    public RoutingResult withSource(String newSource) {
+        return new RoutingResult(recommendedAgentId, confidence, reasoning, newSource);
+    }
+
+    @Override
+    public String toString() {
+        return "RoutingResult{agent=" + recommendedAgentId + ", confidence=" + confidence + ", source=" + source + '}';
     }
 }

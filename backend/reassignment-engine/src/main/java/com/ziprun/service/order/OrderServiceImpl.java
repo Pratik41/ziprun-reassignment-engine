@@ -4,6 +4,8 @@ import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
+import com.ziprun.exception.InvalidStateException;
+import com.ziprun.exception.NotFoundException;
 import com.ziprun.repository.AgentRepository;
 import com.ziprun.repository.OrderRepository;
 import org.slf4j.Logger;
@@ -19,17 +21,12 @@ import java.util.UUID;
  * Order Service Implementation: All order business logic lives here.
  *
  * Responsibilities:
- * - Create orders with validation (agent must exist and be available)
+ * - Create orders with validation (agent must exist and not be OFFLINE)
  * - Query orders by various criteria (status, agent, ID)
- * - Update order status with state machine validation
- * - Coordinate with repositories for persistence
+ * - Drive the Order state machine (transitions are defined on OrderStatus)
+ * - Keep agent load (activeOrderCount) consistent when orders move between agents
  *
  * Controller → OrderService → OrderRepository (clean separation)
- *
- * Why this structure?
- * - Controller: "User wants to create an order"
- * - Service: "Create order, validate agent exists, save to DB"
- * - Repository: "Execute JPA query"
  */
 @Service
 @Transactional
@@ -48,57 +45,47 @@ public class OrderServiceImpl implements OrderService {
     public Order createOrder(String description, String assignedAgentId) {
         log.debug("Creating order: description={}, agent={}", description, assignedAgentId);
 
-        // Validation: Check agent exists
-        Agent agent = agentRepository.findById(assignedAgentId)
-            .orElseThrow(() -> new IllegalArgumentException(
-                "Agent not found: " + assignedAgentId
-            ));
-
-        // Validation: Agent must not be OFFLINE
+        Agent agent = getAgent(assignedAgentId);
         if (agent.getStatus() == AgentStatus.OFFLINE) {
-            throw new IllegalArgumentException(
-                "Cannot assign order to OFFLINE agent: " + assignedAgentId
-            );
+            throw new InvalidStateException("Cannot assign order to OFFLINE agent: " + assignedAgentId);
         }
 
-        // Create order entity
         Order order = new Order();
         order.setId("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         order.setDescription(description);
         order.setAssignedAgentId(assignedAgentId);
         order.setStatus(OrderStatus.ASSIGNED);
         order.setCreatedAt(LocalDateTime.now());
-
-        // Persist order
         Order saved = orderRepository.save(order);
 
-        // Update agent's active order count (fetch fresh to avoid stale data)
-        Agent agentToUpdate = agentRepository.findById(assignedAgentId)
-            .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + assignedAgentId));
-        agentToUpdate.setActiveOrderCount(agentToUpdate.getActiveOrderCount() + 1);
-        agentRepository.save(agentToUpdate);
+        agent.assignOrder();
 
         log.info("Order created: id={}, agent={}, activeOrders={}",
-            saved.getId(), assignedAgentId, agentToUpdate.getActiveOrderCount());
-
+            saved.getId(), assignedAgentId, agent.getActiveOrderCount());
         return saved;
     }
 
     @Override
+    @Transactional(readOnly = true)
     public Optional<Order> findById(String orderId) {
-        log.debug("Fetching order: {}", orderId);
         return orderRepository.findById(orderId);
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Order getById(String orderId) {
+        return orderRepository.findById(orderId).orElseThrow(() -> new NotFoundException("Order", orderId));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
     public List<Order> findAll() {
-        log.debug("Fetching all orders");
         return orderRepository.findAll();
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<Order> findByStatus(OrderStatus status) {
-        log.debug("Fetching orders by status: {}", status);
         return orderRepository.findByStatus(status);
     }
 
@@ -106,70 +93,60 @@ public class OrderServiceImpl implements OrderService {
     public Order updateStatus(String orderId, OrderStatus newStatus) {
         log.debug("Updating order status: id={}, newStatus={}", orderId, newStatus);
 
-        Order order = orderRepository.findById(orderId)
-            .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
-
-        // Validate state transition
-        validateStatusTransition(order.getStatus(), newStatus);
-
-        // Update agent's active order count when order is reassigned or delivered
-        if ((order.getStatus() == OrderStatus.ASSIGNED || order.getStatus() == OrderStatus.REASSIGNMENT_PENDING)
-            && (newStatus == OrderStatus.REASSIGNED || newStatus == OrderStatus.DELIVERED)) {
-            Agent agent = agentRepository.findById(order.getAssignedAgentId())
-                .orElseThrow(() -> new IllegalArgumentException("Agent not found: " + order.getAssignedAgentId()));
-
-            agent.setActiveOrderCount(Math.max(0, agent.getActiveOrderCount() - 1));
-            agentRepository.save(agent);
-
-            log.debug("Agent {} order count decremented to {}", order.getAssignedAgentId(), agent.getActiveOrderCount());
+        Order order = getById(orderId);
+        if (newStatus == OrderStatus.REASSIGNED) {
+            // REASSIGNED always means "now with a different agent"; that needs a target agent
+            throw new InvalidStateException(
+                "Use POST /orders/{id}/reassign or accept a suggestion to move an order to REASSIGNED");
         }
+        order.transitionTo(newStatus);
 
-        // Update
-        order.setStatus(newStatus);
-        Order updated = orderRepository.save(order);
+        if (newStatus == OrderStatus.DELIVERED) {
+            agentRepository.findById(order.getAssignedAgentId()).ifPresent(Agent::releaseOrder);
+        }
 
         log.info("Order status updated: id={}, status={}", orderId, newStatus);
-        return updated;
+        return order;
     }
 
     @Override
-    public List<Order> findByAssignedAgentId(String agentId) {
-        log.debug("Fetching orders for agent: {}", agentId);
-        return orderRepository.findByAssignedAgentId(agentId);
-    }
-
-    /**
-     * Validate order status transitions (state machine).
-     * ASSIGNED → REASSIGNMENT_PENDING → REASSIGNED → DELIVERED (only valid path)
-     *
-     * @throws IllegalArgumentException if transition is invalid
-     */
-    private void validateStatusTransition(OrderStatus current, OrderStatus next) {
-        boolean valid = switch (current) {
-            case ASSIGNED -> next == OrderStatus.REASSIGNMENT_PENDING || next == OrderStatus.DELIVERED;
-            case REASSIGNMENT_PENDING -> next == OrderStatus.REASSIGNED || next == OrderStatus.ASSIGNED;
-            case REASSIGNED -> next == OrderStatus.DELIVERED;
-            case DELIVERED -> false; // Terminal state
-        };
-
-        if (!valid) {
-            throw new IllegalArgumentException(
-                String.format("Invalid status transition: %s → %s", current, next)
-            );
-        }
+    @Transactional(readOnly = true)
+    public List<Order> findActiveOrdersForAgent(String agentId) {
+        return orderRepository.findByAssignedAgentIdAndStatusIn(agentId, OrderStatus.ACTIVE);
     }
 
     @Override
-    @Transactional
+    public Order markReassignmentPending(String orderId) {
+        Order order = getById(orderId);
+        order.transitionTo(OrderStatus.REASSIGNMENT_PENDING);
+        return order;
+    }
+
+    @Override
     public Order reassignToAgent(String orderId, String newAgentId) {
-        Order order = orderRepository.findById(orderId)
-            .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+        Order order = getById(orderId);
+        Agent newAgent = getAgent(newAgentId);
 
+        if (newAgent.getStatus() == AgentStatus.OFFLINE) {
+            throw new InvalidStateException(String.format(
+                "Agent %s is OFFLINE and cannot take order %s; request a new suggestion", newAgentId, orderId));
+        }
+        if (newAgentId.equals(order.getAssignedAgentId())) {
+            throw new InvalidStateException(String.format("Order %s is already assigned to %s", orderId, newAgentId));
+        }
+
+        String oldAgentId = order.getAssignedAgentId();
+        order.transitionTo(OrderStatus.REASSIGNED);
+        agentRepository.findById(oldAgentId).ifPresent(Agent::releaseOrder);
+        newAgent.assignOrder();
         order.setAssignedAgentId(newAgentId);
-        order.setStatus(OrderStatus.REASSIGNED);
-        Order updated = orderRepository.save(order);
 
-        log.info("Order reassigned manually: orderId={}, newAgentId={}", orderId, newAgentId);
-        return updated;
+        log.info("Order reassigned: orderId={}, {} -> {} (new load {})",
+            orderId, oldAgentId, newAgentId, newAgent.getActiveOrderCount());
+        return order;
+    }
+
+    private Agent getAgent(String agentId) {
+        return agentRepository.findById(agentId).orElseThrow(() -> new NotFoundException("Agent", agentId));
     }
 }
