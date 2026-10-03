@@ -28,8 +28,6 @@ npm start
 
 PowerShell: use `$env:GEMINI_API_KEY="..."` instead of `export`.
 
-No key and no internet? Run with the built-in mock LLM: `LLM_PROVIDERS=mock mvn spring-boot:run`.
-
 On first start the database is seeded from `data.sql` (brief Addendum A): 5 agents and 8 orders. Priya Sharma (AGT-001) carries ORD-001, ORD-002 and ORD-008; Rahul (AGT-002) and Kiran (AGT-004) are the only AVAILABLE agents. The H2 file lives in `backend/reassignment-engine/data/`; delete that folder to reset.
 
 ## Demo: the re-plan path
@@ -82,7 +80,6 @@ All settings are in `application.properties` and can be overridden with environm
 | `GEMINI_MODEL` | `gemini-3.6-flash` | |
 | `GROQ_API_KEY` / `GROQ_MODEL` | none / `llama-3.1-8b-instant` | |
 | `LLM_TIMEOUT_MS` | `8000` | per-provider connect/read timeout |
-| `LLM_MOCK_FAIL_MODE` | `none` | with the `mock` provider: `timeout`, `rate-limit`, `garbage`, `hallucinate` to exercise each fallback |
 
 ## How it works
 

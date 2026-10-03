@@ -91,8 +91,8 @@ Option 3. Every failure is an `LLMException` with a `Kind`, handled at the layer
 
 - **Provider chain** (`routing/gateway/LLMGateway`): `llm.providers=gemini,groq` tries Gemini then Groq. Transport failures move on to the next provider; content failures don't, because a different model's opinion doesn't fix a validation problem we can fix deterministically.
 - **The fallback is visible**, not silent: the suggestion's `source` field records e.g. `rule-based (AI fallback: TIMEOUT)`, and the UI shows it as an amber tag. Every fallback also logs the order ID, trigger and kind.
-- **Async path:** `AIRoutingStrategy` falls back with the *same* `RoutingContext`, so a failed AI re-plan still produces an `AGENT_OFFLINE` suggestion with recovery reasoning. `AIFallbackIntegrationTest` checks this with the mock provider in `hallucinate` mode.
-- **Testing failures on purpose:** `MockLLMProvider` + `llm.mock.fail-mode=timeout|rate-limit|garbage|hallucinate`.
+- **Async path:** `AIRoutingStrategy` falls back with the *same* `RoutingContext`, so a failed AI re-plan still produces an `AGENT_OFFLINE` suggestion with recovery reasoning. `AIFallbackIntegrationTest` checks this with a test-only fake LLM that returns a hallucinated agent.
+- **Testing failures on purpose:** the test suite registers a fake provider (`src/test/.../MockLLMProvider`, `llm.mock.fail-mode=timeout|rate-limit|garbage|hallucinate`). It lives only in test code; the application talks to real LLMs only.
 
 **Tradeoffs accepted**  
 - Worst-case latency of the synchronous suggest endpoint is roughly `providers × timeout` (16s with two providers). I chose correctness of the answer over latency here; lowering `llm.timeout-ms` trades the other way.

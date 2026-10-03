@@ -6,7 +6,7 @@ package com.ziprun.routing.gateway;
  * Implementations:
  * - GeminiProvider: Google Gemini (generateContent API)
  * - OpenAICompatibleProvider: Groq and Ollama (chat/completions API)
- * - MockLLMProvider: local, deterministic, no network (with failure injection)
+ * (Tests add a deterministic fake provider named "mock"; it is not part of the application.)
  *
  * LLMGateway chains providers in the order given by llm.providers.
  */

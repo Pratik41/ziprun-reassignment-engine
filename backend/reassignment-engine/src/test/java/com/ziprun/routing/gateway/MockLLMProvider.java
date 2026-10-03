@@ -16,10 +16,10 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Mock LLM: answers from the agent table in the prompt, without any network call.
+ * TEST-ONLY fake LLM: answers from the agent table in the prompt, without any network call.
  *
- * Use it for local runs with no API key (llm.providers=mock) and to exercise
- * every fallback path on purpose via llm.mock.fail-mode:
+ * Lives in src/test so it never ships with the application. Tests select it with
+ * llm.providers=mock and exercise each fallback path via llm.mock.fail-mode:
  *   none        - valid JSON recommending the lowest-load agent
  *   timeout     - throws TIMEOUT
  *   rate-limit  - throws RATE_LIMITED
@@ -62,7 +62,7 @@ public class MockLLMProvider implements LLMProvider {
     }
 
     /**
-     * Emits the reply in small paced chunks so the SSE path can be demoed without a key.
+     * Emits the reply in small paced chunks so the SSE path can be tested.
      */
     @Override
     public String streamLLM(String prompt, Consumer<String> onChunk) {
