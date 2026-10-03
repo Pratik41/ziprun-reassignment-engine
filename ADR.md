@@ -1,308 +1,266 @@
 # Architecture Decision Records - ZipRun Reassignment Engine
 
 ## Overview
-This document captures architectural decisions made during development of the AI-powered order reassignment engine. Each entry follows: **Context → Options → Decision → Tradeoffs**. Decisions are documented as they're made, not retrospectively.
+This document captures the architectural decisions behind the AI-powered order reassignment engine. Each entry follows **Context → Options → Decision → Tradeoffs**, and points at the code that implements it so the reasoning can be checked against what actually ships.
+
+Code paths are relative to `backend/reassignment-engine/src/main/java/com/ziprun/`.
 
 ---
 
-## ADR-1: Routing Logic Architecture
+## ADR-1: Where Routing Logic Lives
 
 **Context**  
-The routing engine is called from two distinct places: an HTTP endpoint for on-demand suggestions (`POST /orders/{id}/suggest`) and an async event handler in the agentic re-planning loop when an agent goes offline. Both need access to the same routing strategies without coupling either to the other.
+"Who should take this order?" is asked from two places: the HTTP endpoint `POST /orders/{id}/suggest`, and the async agentic loop when an agent goes offline. Both need the same strategies, the same candidate list and the same failure behaviour. A service that quietly accumulates routing, fallback, persistence and event publishing becomes the design smell the brief warns about.
 
 **Options considered**
-1. *Put routing in a Service bean* - Inject the service into both controller and event handler. Clean separation, but service becomes a coordination point.
-2. *Put routing in a Domain object method* - Make Order or Agent responsible for its own routing. Mixes domain concerns with strategy selection.
-3. *Dedicated RoutingService with strategy injection* - Separate class responsible only for routing orchestration and strategy selection.
+1. *Routing inside the controller / event handler* - fastest to write, but duplicates candidate selection and fallback in two callers.
+2. *Routing as a domain-object method* (`order.chooseAgent(...)`) - keeps logic "on the model", but entities would need repositories and an LLM client.
+3. *Application Service (`RoutingService`) + Strategy pattern* - one service owns "run the active strategy over the current candidates"; each algorithm is a separate `RoutingStrategy`.
 
 **Decision**  
-Chose a dedicated `RoutingService` bean (option 3). It encapsulates strategy selection logic, is agnostic to callers (HTTP or event), and provides a single place to add LLM timeout handling and fallback logic. This allows the HTTP controller and event handler to use routing without being tightly coupled to each other or to the strategy implementation details.
+Option 3. Responsibilities are split deliberately:
+
+| Component | Owns | Does not do |
+|---|---|---|
+| `routing/RoutingService` | candidate list (AVAILABLE agents minus the order's current agent), pending-load snapshot, active-strategy lookup, last-resort fallback | persistence, events, prompts |
+| `routing/RoutingStrategy` implementations | ranking algorithm | data access |
+| `service/ai/AIAdvisorService` + `PromptBuilder` | prompt choice, LLM call, JSON parsing | roster validation |
+| `service/suggestion/SuggestionService` | persisting suggestions, idempotency, accept/reject | routing |
+| `service/event/ReplanEventHandler` | orchestrating the agentic loop | routing or persistence details |
+
+Both callers build a `RoutingContext` (`RoutingContext.initial()` or `RoutingContext.agentOffline(...)`) and call `routingService.route(order, context)`. The contract is the same; only the context differs.
 
 **Tradeoffs accepted**  
-- Adds another layer (RoutingService) beyond the obvious controller/service split
-- Requires dependency injection in two places instead of one
-- Readers need to understand Spring's bean lifecycle to follow the flow
-- Mitigated by keeping RoutingService focused solely on routing concerns
+- More classes than a single "ReassignmentService"; a reader follows controller → RoutingService → strategy → advisor.
+- `RoutingService` reads the suggestion repository (for pending load), which is a read-side dependency between two concerns. I accepted it because spreading a batch of stranded orders is a routing concern.
 
 ---
 
-## ADR-2: Runtime Strategy Switchability
+## ADR-2: Runtime Strategy Switching
 
 **Context**  
-The system needs to support multiple routing strategies (rule-based, AI-powered, and later zone-aware). The active strategy must be changeable at runtime via configuration without requiring application restart or code changes. This matters for operational flexibility and for the sprint 2 roadmap.
+The active strategy must be switchable at runtime with no restart, from config, and must apply to both call paths. Sprint 2 adds `ZoneAffinityStrategy`; adding it should not modify existing code.
 
 **Options considered**
-1. *Spring `@Qualifier` with config property* - Simple, but changing the qualifier requires restart (Spring re-creates beans on config reload only in certain contexts).
-2. *Auto-wired `Map<String, RoutingStrategy>` with config lookup* - Spring automatically populates a map of all beans implementing RoutingStrategy, keyed by name. Active strategy selected at runtime by reading config.
-3. *Manual factory with switch statement* - Explicit, but requires modifying the factory every time a new strategy is added (violates open/closed principle).
-4. *Strategy registry pattern* - Dynamic registration of strategies, but adds registration boilerplate and requires startup discovery logic.
+1. *`@Qualifier` + config property* - picks one bean at startup; switching needs a restart.
+2. *Auto-wired `Map<String, RoutingStrategy>` + mutable active name* - Spring builds the map from bean names; the active name is looked up on each call.
+3. *Manual factory with a `switch`* - explicit, but every new strategy edits the factory.
+4. *Spring Cloud `@RefreshScope`* - real config refresh, but pulls in Spring Cloud and a refresh endpoint for one string.
 
 **Decision**  
-Chose option 2: auto-wired `Map<String, RoutingStrategy>` bean map. Spring automatically discovers and injects all beans implementing the strategy interface. The active strategy is selected by reading `routing.strategy` from `application.properties` at call time (not bean creation time), allowing runtime changes via environment variables. Both HTTP endpoint and event handler inject the same map and use the same selection logic.
+Option 2 (`routing/RoutingService`):
+- Strategies register by bean name: `@Component("rule-based")`, `@Component("ai")`.
+- The active name lives in an `AtomicReference<String>`, seeded from `routing.strategy` (env `ROUTING_STRATEGY`) at startup.
+- `PUT /routing/strategy {"strategy":"rule-based"}` (`controller/RoutingController`) swaps it; `GET /routing/strategy` shows active and available. The UI's demo panel has a toggle.
+- Every `route()` call reads the reference once, so HTTP and async callers see a switch on their next call. A re-plan batch already running may switch strategy midway, order by order, and that's acceptable.
+- **Startup validation:** the constructor throws if `routing.strategy` names an unregistered strategy, or if `rule-based` (the fallback) is missing. Misconfiguration fails the boot, not the first request.
+
+Adding Sprint 2's strategy = one new class `@Component("zone-affinity") class ZoneAffinityStrategy implements RoutingStrategy`. No existing file changes.
 
 **Tradeoffs accepted**  
-- Less explicit than a factory (readers must know Spring auto-populates maps by interface)
-- Runtime failures if `routing.strategy` config is misconfigured (mitigated by adding startup validation)
-- Adding a new strategy requires two things: implement interface + register bean (not one)
-- Benefit: zero changes to existing code when adding sprint 2 strategies
+- Implicit wiring: a reader must know Spring fills the map by bean name.
+- The runtime switch is in-memory and per-instance: a restart reverts to config, and multiple instances would each need the PUT. For one ops service that's fine; with several instances I'd move the value to the database or a config server.
+- The switch endpoint has no auth (same as the rest of the API in this sprint).
 
 ---
 
-## ADR-3: LLM Resilience & Graceful Degradation
+## ADR-3: Staying Healthy When the LLM Is Unavailable
 
 **Context**  
-The AI routing strategy makes HTTP calls to an external LLM (Gemini/Groq/Ollama). These calls can fail in multiple distinct ways: network timeout, API quota exhaustion, malformed JSON response, hallucinated agent IDs, service unavailable. The system must remain operational when the LLM is broken or slow.
+LLM calls fail in several distinct ways, and a failure must never stall a request or silently drop a re-plan. The brief also allows Gemini, Groq or Ollama, and free tiers hit quotas.
 
 **Options considered**
-1. *Fail fast* - If LLM call fails, return error to caller. Simple, but breaks the entire reassignment flow.
-2. *Fallback to rule-based immediately* - Any LLM failure → immediately call rule-based strategy. Fast, but loses tracing of why fallback happened.
-3. *Exponential backoff retry* - Retry LLM calls with increasing delays. Masks transient issues, but adds latency to responses.
-4. *Validate response, fallback on issues* - Attempt LLM call, validate response thoroughly (agent ID exists, confidence in range, JSON parseable), fallback to rule-based if validation fails. Async re-plan failures also produce rule-based suggestion rather than silent drop.
+1. *Fail fast* - surface errors to the caller; breaks the re-plan loop whenever the LLM is down.
+2. *Retry with backoff* - helps transient errors, but adds latency and does nothing for bad output.
+3. *Typed failures + provider chain + validate + rule-based fallback.*
 
 **Decision**  
-Chose option 4. Implementation:
-- LLM timeout (> 5s) → immediate fallback to rule-based
-- Malformed JSON → log error, fallback to rule-based
-- Hallucinated agent ID → validate against roster before persisting, fallback if invalid
-- In async re-plan context: LLM failure → create rule-based suggestion anyway (never silent drop)
-- All failures logged with context (order ID, strategy attempted, error type)
+Option 3. Every failure is an `LLMException` with a `Kind`, handled at the layer that understands it:
+
+| Failure | Detected in | Kind | Response |
+|---|---|---|---|
+| No API key for a provider | `LLMGateway` | `NOT_CONFIGURED` | skip to next provider |
+| Slow / hung provider | `LLMConfig` timeouts (`llm.timeout-ms`, default 8s) | `TIMEOUT` | next provider |
+| Quota exhausted (HTTP 429) | `LLMException.fromHttp` | `RATE_LIMITED` | next provider |
+| Other HTTP / network error | `LLMException.fromHttp` | `HTTP_ERROR` | next provider |
+| Empty / blocked reply | provider classes | `EMPTY_RESPONSE` | next provider |
+| Prose, not JSON | `AIAdvisorService.parse` | `UNPARSEABLE` | rule-based fallback |
+| Agent ID not in the roster sent | `AIRoutingStrategy.validate` | `HALLUCINATED_AGENT` | rule-based fallback |
+| Confidence outside [0,1], blank reasoning | `AIRoutingStrategy.validate` | `INVALID_RESPONSE` | drop that option; fall back if none remain |
+| Any bug in any strategy | `RoutingService.rank` catch-all | n/a | rule-based fallback |
+
+- **Provider chain** (`routing/gateway/LLMGateway`): `llm.providers=gemini,groq` tries Gemini then Groq. Transport failures move on to the next provider; content failures don't, because a different model's opinion doesn't fix a validation problem we can fix deterministically.
+- **The fallback is visible**, not silent: the suggestion's `source` field records e.g. `rule-based (AI fallback: TIMEOUT)`, and the UI shows it as an amber tag. Every fallback also logs the order ID, trigger and kind.
+- **Async path:** `AIRoutingStrategy` falls back with the *same* `RoutingContext`, so a failed AI re-plan still produces an `AGENT_OFFLINE` suggestion with recovery reasoning. `AIFallbackIntegrationTest` checks this with the mock provider in `hallucinate` mode.
+- **Testing failures on purpose:** `MockLLMProvider` + `llm.mock.fail-mode=timeout|rate-limit|garbage|hallucinate`.
 
 **Tradeoffs accepted**  
-- Adds validation logic (extra code, potential for bugs in validator)
-- Rule-based fallback may not be optimal for the specific order, but it's better than nothing
-- Logging adds overhead, but necessary for debugging in production
-- Never fully silent failures - ops always sees some recommendation
+- Worst-case latency of the synchronous suggest endpoint is roughly `providers × timeout` (16s with two providers). I chose correctness of the answer over latency here; lowering `llm.timeout-ms` trades the other way.
+- No retries within a provider: a transient blip moves straight to the next provider or to rule-based.
+- Rule-based reasoning is plainer than the AI's. Ops still gets an actionable suggestion, labelled honestly.
 
 ---
 
-## ADR-4: Agentic Loop Trigger Mechanism
+## ADR-4: Triggering the Agentic Loop Off the Request Path
 
 **Context**  
-When an agent goes OFFLINE, the system must identify affected orders and queue reassignment suggestions asynchronously (without blocking the HTTP response). The `PATCH /agents/{id}/status` endpoint must return immediately. Elsewhere, a background process picks up the status change and runs routing on affected orders.
+`PATCH /agents/{id}/status` must return immediately when an agent goes OFFLINE. Re-planning (several LLM calls) happens elsewhere. It must fire because something changed, not on a timer, and must not run against uncommitted data.
 
 **Options considered**
-1. *Scheduled polling* - A `@Scheduled` job runs every N seconds, queries for OFFLINE agents, and re-plans. Simple, but not event-driven and can miss rapid state changes.
-2. *Spring `@EventListener` + `@Async`* - Publish a domain event when agent status changes, listen for it in a separate method annotated with `@Async`. Clean, Spring native.
-3. *ApplicationEventPublisher* - Explicit event publishing, with decoupled listener. More verbose than option 2, but same effect.
-4. *Manual thread pool executor* - Create a thread pool, submit re-plan tasks to it. Full control, but requires manual error handling and monitoring.
+1. *`@Scheduled` poller* looking for offline agents - not event-driven, adds latency up to the poll interval, and needs "already processed" bookkeeping.
+2. *`@EventListener` + `@Async`* - simple, but runs as soon as the event is published, which is inside the status-update transaction, so the listener can read data from before the commit.
+3. *`@TransactionalEventListener(AFTER_COMMIT)` + `@Async`* - fires only once the OFFLINE status is committed, on a separate thread pool.
+4. *Message broker (Kafka/RabbitMQ)* - durable and retryable, but heavy infrastructure for one in-process event.
 
 **Decision**  
-Chose option 2: Spring `@EventListener` + `@Async`. When an agent's status changes to OFFLINE, the Agent entity publishes a `AgentOfflineEvent`. A separate `ReplanEventHandler` listens and is invoked asynchronously on a thread pool. This keeps the HTTP path fast, decouples agent domain logic from re-planning logic, and integrates with Spring's async/monitoring infrastructure.
+Option 3.
+- `AgentServiceImpl.updateStatus` publishes `AgentOfflineEvent` (via `ApplicationEventPublisher`) only on a real transition to OFFLINE.
+- `ReplanEventHandler.onAgentOffline` is `@Async @TransactionalEventListener(phase = AFTER_COMMIT)` on the `ziprun-` pool (`spring.task.execution.*`). If the status update rolls back, no re-plan runs. The PATCH returns as soon as the status commits; suggestions land a moment later.
+- **No transaction wraps the loop.** Each step (flag order pending, persist suggestion) is its own short transaction in the services, so an 8-second LLM call never holds a DB connection open, and one failing order can't roll back the others.
+- Loop shape: **observe** (event) → **reason** (`findActiveOrdersForAgent`: ASSIGNED, REASSIGNED or already PENDING) → **act** (flag all REASSIGNMENT_PENDING first so the UI updates at once, then route each with `RoutingContext.agentOffline(...)` and queue a suggestion) → **checkpoint** (ops decides, see ADR-9).
 
-Implementation details:
-- Agent status change → publish event
-- Event handler queries affected orders (where assigned_agent = OFFLINE_AGENT and status = ASSIGNED)
-- For each order: check if PENDING suggestion with trigger=AGENT_OFFLINE exists (idempotency check)
-- Call routing strategy on each stranded order
-- Persist ReassignmentSuggestion with trigger=AGENT_OFFLINE
+**When the async re-plan itself fails:** per-order failures are caught and logged with the order ID, and the loop continues. The order stays REASSIGNMENT_PENDING, so it's visible in the UI with "Get Suggestion" and "Reassign" buttons, and the next trigger retries it (it has no pending suggestion, so idempotency doesn't skip it). A run summary logs created / skipped / no-agent / failed counts. Orders with no AVAILABLE agent log a WARN asking ops to add capacity.
 
 **Tradeoffs accepted**  
-- Adds complexity (event publishing, separate listener)
-- Async failures may not be visible to caller (mitigated by comprehensive logging)
-- Event handler must handle cases where agent/order state changed during async processing
-- Benefit: HTTP endpoint fast, re-planning doesn't block ops
+- In-process events are not durable: if the JVM dies mid-loop, unfinished orders stay PENDING without suggestions until the next trigger or a manual request. A broker or an outbox table would fix this; I judged it overkill for this sprint.
+- `@Async` failures don't reach the HTTP caller; visibility is through logs and the UI state above.
 
 ---
 
 ## ADR-5: Extensibility & Deliberate Exclusions
 
 **Context**  
-This is sprint 1 of a multi-sprint roadmap. Sprint 2 introduces zone awareness, capacity constraints, and weight classes. Sprint 3 adds proactive re-planning (SLA deadlines) and a full dispatch board. Design must accommodate these without structural rework, but also avoid premature abstraction.
+Sprint 2 brings zones, capacity, weight classes and a third strategy; Sprint 3 brings SLA-driven proactive re-planning and a dispatch board. Today's design should make these additive, without speculative abstractions.
 
-### Extensibility: Where Sprint 2 Plugs In
+### Extension seams in the code
 
-**Zone-Aware Routing (Sprint 2)**
-- Current: Order has pickup/dropoff description text
-- Future: Order has `pickupZone`, `dropoffZone` fields (nullable, placed in schema now)
-- Future: Agent has `currentZone` field (nullable, placed in schema now)
-- Future: New `ZoneAffinityStrategy` implements `RoutingStrategy`
-- Activation: Add bean, set `routing.strategy=zone-aware` in config
+**Sprint 2: `ZoneAffinityStrategy`**
+- Data: `Order.pickupZone`, `Order.dropoffZone`, `Agent.currentZone`, `Agent.maxCapacity` already exist as nullable columns (`domain/Order.java`, `domain/Agent.java`). Sprint 2 populates them; no migration.
+- Behaviour: implement `RoutingStrategy.recommend(order, availableAgents, context)` and annotate `@Component("zone-affinity")`. `RoutingService` discovers it; `PUT /routing/strategy` activates it. The AI prompt already prints zones when present (`PromptBuilder.describeOrder`).
+- Capacity: a filter on `agent.getActiveOrderCount() < agent.getMaxCapacity()` belongs in `RoutingService.rank`'s candidate list, one place for all strategies.
 
-*Where it lives in current code:*
-- Schema: Order.java line ~30 (pickupZone field, marked @Nullable for future)
-- Schema: Agent.java line ~20 (currentZone field, marked @Nullable for future)
-- Strategy interface: RoutingStrategy.java (already generic enough)
+**Sprint 3: proactive SLA loop**
+- `Order.slaDeadline` exists (nullable).
+- Trigger: add `TriggerReason.SLA_RISK`, a `RoutingContext.slaRisk(...)` factory, and a `@Scheduled` `SlaMonitor` that publishes an `OrderAtRiskEvent`. A timer is right *there* because time passing is the event.
+- The routing contract doesn't change: strategies already receive a `RoutingContext`, and `AIAdvisorService` already chooses prompts by context. A third prompt slots in next to the two existing ones.
+- Persistence: `SuggestionService.createSuggestion(orderId, result, triggerReason)` already takes the trigger, and the UI badge keys off `triggerReason`.
 
-**SLA-Driven Re-Planning (Sprint 3)**
-- Current: Re-planning triggered only on OFFLINE event
-- Future: Re-planning also triggered when order approaches SLA deadline
-- Implementation: Create `OrderApproachingSLAEvent`, publish from scheduled monitor
-- Same event handler mechanism handles both trigger types
+**Sprint 3: multi-step re-plan / downstream pressure**  
+Partly in place: `RoutingContext.pendingLoad` makes each routing call aware of suggestions already queued, so a batch of stranded orders is spread across agents (verified in `ReassignmentFlowIntegrationTest`). The re-plan prompt shows the whole stranded batch.
 
-*Where it lives in current code:*
-- ReplanEventHandler.java: `handleOfflineEvent()` is already trigger-agnostic; can add `handleSLAEvent()` without changes to existing logic
-- Event interface: Generic enough to support multiple event types
+### Deliberate exclusions
 
-### Deliberate Exclusions
-
-**What's NOT in sprint 1, and why:**
-
-1. **Full Dispatch Board** (Sprint 3, +8 pts ceiling)
-   - Current floor UI shows only REASSIGNMENT_PENDING orders
-   - Full board shows all statuses, real-time agent load, zone map
-   - *Why deferred:* Agentic loop correctness is the must-have. A gorgeous UI that costs you the core event-driven loop isn't a win.
-   - *When to build:* Sprint 3, after zone/capacity logic stabilizes
-
-2. **SLA Deadline Tracking** (Sprint 3)
-   - Current: Orders have no deadline field
-   - Future: Orders get `slaDeadline` field, proactive re-planning when approaching breach
-   - *Why deferred:* Reactive re-planning (on OFFLINE) is the immediate requirement. Proactive re-planning is an enhancement.
-   - *When to build:* Sprint 3, after ops validates reactive loop works at scale
-
-3. **Priority/Tier System** (Sprint 3)
-   - *Why deferred:* Not mentioned in current requirements. Adds complexity to routing without immediate business need.
-
-4. **Traffic/Weather Integration** (Sprint 3 future)
-   - *Why deferred:* Requires external data sources, adds latency to routing calls. Start with agent capacity and zone, validate the model works, then add external tools.
-
-5. **Multi-Agent Recommendation** (Current: returns one agent per order)
-   - *Why deferred:* One recommendation per order is clearer for ops. Future: return ranked list of options. Current design doesn't prevent this; adding it later is additive.
+1. **Auto-assigning high-confidence suggestions.** Excluded on purpose (see ADR-9). The checkpoint is a requirement, not a missing feature.
+2. **SSE token streaming (+5 bonus).** Correctness of the loop (timeouts, idempotency, transactional boundaries, honest fallbacks) is a requirement; watching tokens arrive is an enhancement. Streaming also complicates validation, because the reply can't be checked until it's complete.
+3. **Full dispatch board / SLA countdown / zone map.** The "orders by agent" view covers agent load; a board with SLA colours needs SLA data that doesn't exist yet.
+4. **Auth on the API.** Out of scope for the sprint; noted because `PUT /routing/strategy` is an operational lever that would need it in production.
+5. **Durable event delivery** (broker / outbox), covered in ADR-4.
 
 ---
 
 ## ADR-6: Frontend Framework Choice
 
 **Context**  
-The ops interface needs to display reassignment suggestions, accept/reject controls, agent status, and a re-plan badge showing when suggestions came from the agentic loop. Framework choices: React 18 or Angular 17.
+The ops interface shows pending reassignments with reasoning, accept/reject, the re-plan badge, agent status, and refreshes on its own. Choices: React 18 or Angular 17.
 
 **Options considered**
-1. *React 18 + Vite* - Lighter, faster dev server, simpler mental model, large ecosystem
-2. *Angular 17 + standalone API* - More opinionated structure, built-in patterns, better for teams with Spring Boot expertise
+1. *React 18 + Vite* - lighter, fast dev server, larger ecosystem.
+2. *Angular 17 standalone components* - opinionated structure, built-in HttpClient, RxJS, DI.
 
 **Decision**  
-Chose Angular 17 + standalone API. Reasons:
-- Aligns with deep Spring Boot expertise (similar dependency injection patterns)
-- Strong typing (TypeScript) pairs well with strict backend design
-- RxJS observables map naturally to async event streams (like Spring events)
-- Built-in HTTP client, forms, routing reduce boilerplate
-- Standalone API removes module boilerplate, faster iteration than older Angular
+Angular 17 with standalone components (`frontend/reassignment-ui`). DI and services mirror the Spring side; RxJS makes polling simple: `RefreshService` merges on-demand refreshes with a 3-second `interval`, so suggestions created by the async loop appear without a click. Background polls don't flash spinners, and backend error messages (`{status, error, message}`) are shown verbatim in a dismissible banner.
 
 **Tradeoffs accepted**  
-- Heavier framework than React (more initial bundle size, but better for larger apps)
-- Steeper learning curve for non-Angular devs (mitigated by solo context)
-- Requires TypeScript (stricter, but better for catching bugs)
-- Benefit: Strong alignment with backend architectural patterns, robust CLI tooling, less "decision fatigue" on framework setup
+- Heavier bundle and more boilerplate than React for a small UI.
+- Polling rather than push: up to 3s delay and constant small requests. SSE/WebSocket push is a Sprint 3 candidate alongside the streaming bonus.
 
 ---
 
-## ADR-7: Initial vs Re-Plan Prompts (Why They Must Differ)
+## ADR-7: Initial vs Re-Plan Prompts
 
 **Context**  
-The AI routing strategy sends structured prompts to an LLM and expects back: recommended agent, confidence score, reasoning. There are two scenarios:
-1. **Initial assignment:** Normal routing - which of these available agents should take this order?
-2. **Re-plan (agent offline):** Recovery routing - an agent failed, these orders are now stranded, who should take them?
+A first assignment and a recovery after an agent goes offline are different situations. The model has to know which one it's in.
 
 **Options considered**
-1. *Single prompt with a flag* - One template, vary a single field: `{ scenario: "initial" | "recovery" }`
-2. *Separate prompts with different context* - Write two distinct prompts, each tailored to its scenario
+1. *One template with a `scenario` flag.*
+2. *Two prompts written for their situation, sharing only the roster table and output contract.*
 
 **Decision**  
-Chose option 2: separate, context-rich prompts.
+Option 2 (`service/ai/PromptBuilder`).
 
-**Initial Prompt Example:**
-```
-Order: Electronics delivery, Koramangala → Indiranagar
-Available agents:
-- Priya (2 active orders, BUSY)
-- Rahul (0 active orders, AVAILABLE) ← Good fit
-- Ananya (1 active order, BUSY)
-
-Recommend the best agent and explain why.
-Return JSON: {"agentId": "...", "confidence": 0.9, "reasoning": "..."}
-```
-
-**Re-Plan Prompt Example:**
-```
-RECOVERY MODE: AGENT OFFLINE EVENT
-
-Agent AGT-001 (Priya) just went offline.
-Orders now STRANDED (were assigned to Priya):
-- ORD-001: Electronics, Koramangala → Indiranagar
-- ORD-002: Groceries, HSR Layout → BTM
-
-Available agents for reassignment:
-- Rahul (0 active orders, AVAILABLE)
-- Ananya (1 active order, BUSY)
-- Deepak (3 active orders, BUSY)
-
-For each stranded order, recommend a reassignment agent. 
-Consider: Which agent can most quickly absorb these orders?
-Return JSON array: [{"orderId": "ORD-001", "agentId": "...", ...}, ...]
-```
-
-**Why different?** The model must understand it's in **recovery mode**, not normal routing:
-- Tone: "We have an emergency, fix it" vs "Assign this normally"
-- Context: "This agent failed; these orders are stranded" vs "New order arrived"
-- Constraint: "Previous assignments to Priya are void" vs "Respect current assignments"
-
-Same prompt template means the model treats recovery like a normal assignment, leading to hallucinations or suboptimal decisions.
+- **Initial prompt:** "routine assignment request, nothing has failed, aim for a balanced fleet". Gives the order (id, description, current agent, zones if known), the roster table (`active`, `pending`, `effective` load), and decision rules.
+- **Re-plan prompt:** an *incident report*. It names who went offline and states their assignments are void. It lists every stranded order in the batch and marks which one is being decided now. It explains that the `pending` column shows where earlier batch orders are heading. Recovery priorities: speed, **spreading the batch**, and **flagging a thin roster** (fewer agents than stranded orders, so lower confidence and suggest calling in capacity). It also asks the reasoning to open by naming the recovery.
+- **Shared output contract:** JSON only, `{"recommendations":[{agent_id, confidence, reasoning}]}`, ranked up to 3. agent_id must be copied from the table, confidence bands are defined, and reasoning is written for an ops manager without invented facts. The parser also accepts the brief's single-object `{"agentId", ...}` form and tolerates markdown fences.
+- `AIAdvisorServiceTest.promptsAreGenuinelyDifferent` pins the differences.
 
 **Tradeoffs accepted**  
-- Maintains two prompts (doubles the code paths to test)
-- Requires two validation paths (different parsing per scenario)
-- Benefit: Model reasons correctly about each scenario
+- Two prompts to maintain. Mitigated by sharing the roster formatter and output contract, so parsing and validation are one code path.
+- The re-plan routes stranded orders one call at a time rather than asking the model to plan the whole batch in one response. More calls, but each response is validated independently and one bad answer can't spoil the batch.
 
 ---
 
 ## ADR-8: Idempotency in Agentic Re-Planning
 
 **Context**  
-When an agent goes offline, the system queries for affected orders and creates ReassignmentSuggestion records. In edge cases (rapid status changes, retry logic), the same event might fire multiple times or overlapping events might affect the same order.
-
-**Scenario:** Agent AGT-001 goes offline (event fires, creates suggestions for ORD-001, ORD-002). Five seconds later, AGT-001 goes offline again due to a retry or network glitch. Without idempotency, we'd create duplicate suggestions.
+The same agent can flip OFFLINE → AVAILABLE → OFFLINE quickly, and two triggers can race on the same orders. Duplicate PENDING suggestions for one order confuse ops and break "accept means done".
 
 **Options considered**
-1. *Don't worry about it* - Simple, but ops sees duplicate suggestions
-2. *Lock during re-plan* - Acquire a lock on the agent, process all orders, release lock. Prevents duplicates but adds complexity.
-3. *Check before inserting* - Before creating a suggestion, query: does PENDING suggestion with trigger=AGENT_OFFLINE already exist for this order?
+1. *Ignore it.*
+2. *Check-then-insert* with a query.
+3. *Check-then-insert under a row lock*, plus a cheap pre-check before the expensive LLM call.
+4. *DB unique constraint* - a partial unique index (`WHERE status='PENDING' AND trigger_reason='AGENT_OFFLINE'`) isn't portable across H2/Postgres via JPA.
 
 **Decision**  
-Chose option 3. Implementation:
-```sql
-SELECT * FROM reassignment_suggestions 
-WHERE order_id = ? 
-  AND status = 'PENDING' 
-  AND trigger_reason = 'AGENT_OFFLINE'
-```
-If exists, skip creating a new suggestion. This is idempotent: calling the re-plan handler twice produces the same result (one suggestion).
+Option 3:
+- Pre-check in `ReplanEventHandler.replanOrder` (`existsByOrderIdAndStatusAndTriggerReason`) skips orders that are already covered before spending an LLM call.
+- `SuggestionService.createReplanSuggestionIfAbsent` re-checks inside a transaction after `OrderRepository.findByIdForUpdate` (`PESSIMISTIC_WRITE`). A concurrent run blocks on the lock, then sees the first run's suggestion and skips.
+- Stranded orders include ones already REASSIGNMENT_PENDING, so an order whose earlier re-plan failed (no suggestion) is retried on the next trigger, while covered ones are skipped.
+- `AgentServiceImpl` only publishes the event on a real transition to OFFLINE, so a repeated OFFLINE→OFFLINE PATCH is a no-op.
+- Tested: `ReassignmentFlowIntegrationTest.secondOfflineTriggerDoesNotDuplicateSuggestions`.
 
 **Tradeoffs accepted**  
-- Adds a query per order (N+1 risk, mitigated by indexed queries)
-- "Skip if already pending" means quick re-plans don't overwrite slow ones (OK; don't overwrite someone's pending decision)
-- Benefit: Clean idempotency without locks
+- A row lock per order during the insert (milliseconds; the LLM call happens before the lock is taken).
+- If ops *rejects* the offline suggestion, a later trigger will create a new one. I treat that as desirable: the order is still stranded.
+
+---
+
+## ADR-9: The Human Checkpoint
+
+**Context**  
+The loop could reassign automatically. The brief asks for a checkpoint where ops approves.
+
+**Options considered**
+1. *Auto-assign everything* - fastest recovery, no human in the loop.
+2. *Queue suggestions, ops decides* - slower, but ops stays in control of irreversible moves.
+3. *Hybrid: auto-assign above a confidence threshold.*
+
+**Decision**  
+Option 2. The loop only ever creates PENDING suggestions; nothing in `ReplanEventHandler` changes `assignedAgentId`. The checkpoint is `PATCH /suggestions/{id}` → `SuggestionService.updateStatus`:
+- **ACCEPTED:** in one transaction, `OrderService.reassignToAgent` releases the old agent's load, adds to the new agent's, sets status REASSIGNED, and rejects any other PENDING suggestions for that order. If the recommended agent went OFFLINE in the meantime, it returns 409 and nothing changes.
+- **REJECTED:** the order stays REASSIGNMENT_PENDING; the UI offers "Get Suggestion" or manual reassign.
+
+**When I'd remove the checkpoint:** for re-plans where (a) the suggestion came from the AI rather than a fallback, (b) confidence ≥ 0.9, (c) the recommended agent's effective load stays below `maxCapacity`, and (d) the order's SLA would breach before a typical ops response time. That requires Sprint 2 capacity and Sprint 3 SLA data, and an audit trail of auto-decisions before it's trusted.
+
+**Tradeoffs accepted**  
+Recovery speed is bounded by ops response time. That is the intended trade: wrong automatic reassignments cost more than a minute of delay.
 
 ---
 
 ## Summary Table
 
-| ADR | Topic | Decision | Key Insight |
-|-----|-------|----------|------------|
-| 1 | Routing Architecture | Dedicated RoutingService | Decouple HTTP and event handlers |
-| 2 | Strategy Switchability | Map bean + config lookup | No restart needed for new strategies |
-| 3 | LLM Resilience | Validate → fallback | Never silent failures; always show suggestion |
-| 4 | Agentic Loop Trigger | @EventListener + @Async | Fast HTTP, async re-planning |
-| 5 | Extensibility | Nullable fields for future, strategy interface open | Sprint 2/3 additions are additive |
-| 6 | Frontend Framework | React 18 + Vite | Speed and iteration over convention |
-| 7 | Two Prompts | Separate context-rich prompts | Model must understand recovery mode |
-| 8 | Idempotency | Check before insert | No duplicate suggestions |
-
----
-
-## Next Steps / Open Questions for Walkthrough
-
-1. **Why not auto-assign high-confidence suggestions?** 
-   - Answer: Intentional human checkpoint. By sprint 3, conditional auto-assign based on urgency is reasonable.
-
-2. **How do you measure success of the agentic loop?**
-   - Answer: Suggestions created within N seconds of agent going offline, zero missed orders, zero duplicates.
-
-3. **What's the most likely failure mode in production?**
-   - Answer: LLM quota exhaustion; fallback to rule-based handles it, but ops sees degradation in reasoning quality.
-
-4. **How does zone-aware strategy plug in?**
-   - Answer: New bean implementing RoutingStrategy, registered with Spring, selected by config. Zero changes to existing code.
+| ADR | Topic | Decision | Key point |
+|-----|-------|----------|-----------|
+| 1 | Routing location | Application service + Strategy | One `route(order, context)` for HTTP and async |
+| 2 | Strategy switching | Bean map + `AtomicReference`, `PUT /routing/strategy` | No restart; startup validation; new strategy = new class |
+| 3 | LLM resilience | Typed failures, provider chain, validation, labelled fallback | Never silent; source shows what really answered |
+| 4 | Loop trigger | `@TransactionalEventListener(AFTER_COMMIT)` + `@Async` | Sees committed state; no DB tx across LLM calls |
+| 5 | Extensibility | Nullable sprint-2/3 columns, context-based contract | Zone strategy and SLA trigger are additive |
+| 6 | Frontend | Angular 17 standalone + RxJS polling | Async results appear without a click |
+| 7 | Prompts | Routine request vs incident report | Model knows it's recovering and sees the whole batch |
+| 8 | Idempotency | Pre-check + re-check under row lock | No duplicates even with concurrent triggers |
+| 9 | Checkpoint | Queue, never auto-assign | Accept is atomic; criteria for removing it defined |
 
 ---
 
 *Document started:* 2026-09-23  
-*Last updated:* 2026-09-23
+*Last updated:* 2026-10-04
