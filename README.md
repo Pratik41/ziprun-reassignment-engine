@@ -1,5 +1,7 @@
 # ZipRun AI Reassignment Engine
 
+[![CI](https://github.com/Pratik41/ziprun-reassignment-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Pratik41/ziprun-reassignment-engine/actions/workflows/ci.yml)
+
 When a delivery agent goes offline mid-shift, this system notices, finds the orders they were carrying, asks an AI (or a rule-based fallback) who should take each one, and queues those suggestions for an ops manager to accept or reject. Nobody has to click anything for the suggestions to appear.
 
 - **Backend:** Spring Boot 3.3 · Java 17 · H2 · `backend/reassignment-engine`
