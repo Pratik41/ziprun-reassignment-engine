@@ -314,7 +314,8 @@ export class AgentRosterComponent implements OnInit, OnDestroy {
   }
 
   loadAgents() {
-    this.loading = true;
+    // Spinner only on first load; background polls refresh silently
+    this.loading = this.agents.length === 0;
     this.error = null;
     this.apiService.getAgents().subscribe({
       next: (data) => {

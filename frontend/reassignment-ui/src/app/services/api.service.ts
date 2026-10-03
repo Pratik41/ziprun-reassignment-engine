@@ -52,6 +52,14 @@ export class ApiService {
     });
   }
 
+  getRoutingStrategy(): Observable<{ active: string; available: string[] }> {
+    return this.http.get<{ active: string; available: string[] }>(`${this.apiUrl}/routing/strategy`);
+  }
+
+  setRoutingStrategy(strategy: string): Observable<{ active: string; available: string[] }> {
+    return this.http.put<{ active: string; available: string[] }>(`${this.apiUrl}/routing/strategy`, { strategy });
+  }
+
   manualReassign(orderId: string, newAgentId: string): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/reassign`, {
       newAgentId

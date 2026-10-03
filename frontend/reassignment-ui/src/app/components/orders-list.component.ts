@@ -4,7 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { RefreshService } from '../services/refresh.service';
 import { SuggestionCardComponent } from './suggestion-card.component';
-import { Subscription } from 'rxjs';
+import { Observable, Subscription, forkJoin } from 'rxjs';
 
 @Component({
   selector: 'app-orders-list',
@@ -15,12 +15,19 @@ import { Subscription } from 'rxjs';
       <div class="container-header">
         <div>
           <h2>📋 Orders Pending Reassignment</h2>
-          <p class="header-desc">Review and accept/reject AI suggestions</p>
+          <p class="header-desc">Review and accept/reject suggestions · auto-refreshes every 3s</p>
         </div>
         <button (click)="refreshOrders()" class="btn-refresh">
           <span class="refresh-icon">🔄</span> Refresh
         </button>
       </div>
+
+      @if (actionError) {
+        <div class="error-banner">
+          <span>⚠️ {{ actionError }}</span>
+          <button (click)="actionError = null" class="btn-retry">Dismiss</button>
+        </div>
+      }
 
       @if (loading) {
         <div class="loading-state">
@@ -47,6 +54,8 @@ import { Subscription } from 'rxjs';
                   <app-suggestion-card
                     [suggestion]="suggestion"
                     [order]="order"
+                    [agentName]="agentName(suggestion.recommendedAgentId)"
+                    [busy]="busySuggestionId === suggestion.id"
                     (accept)="handleAccept($event)"
                     (reject)="handleReject($event)"
                   ></app-suggestion-card>
@@ -57,11 +66,14 @@ import { Subscription } from 'rxjs';
                     <div class="no-sugg-text">
                       <h4>Order {{ order.id }}</h4>
                       <p>{{ order.description }}</p>
-                      <small>No AI suggestions yet</small>
+                      <small>
+                        @if (order.hadSuggestions) { All suggestions rejected. Request another or reassign manually. }
+                        @else { Re-plan in progress or no available agent. Request a suggestion or reassign manually. }
+                      </small>
                     </div>
                     <div style="display: flex; gap: 8px;">
-                      <button (click)="requestSuggestion(order.id)" class="btn-suggest">
-                        Get AI Suggestion
+                      <button (click)="requestSuggestion(order.id)" class="btn-suggest" [disabled]="requestingOrderId === order.id">
+                        {{ requestingOrderId === order.id ? 'Thinking…' : 'Get Suggestion' }}
                       </button>
                       <button (click)="toggleReassignMode(order.id)" class="btn-manual">
                         🔄 Reassign
@@ -408,16 +420,19 @@ export class OrdersListComponent implements OnInit, OnDestroy {
   agents: any[] = [];
   loading = true;
   error: string | null = null;
+  actionError: string | null = null;
+  busySuggestionId: string | null = null;
+  requestingOrderId: string | null = null;
   reassigningOrderId: string | null = null;
   selectedAgentForReassign: { [orderId: string]: string } = {};
+  private loadedOnce = false;
   private refreshSubscription: Subscription | null = null;
 
   constructor(private apiService: ApiService, private refreshService: RefreshService) {}
 
   ngOnInit() {
     this.loadOrders();
-    this.loadAgents();
-    // Listen for refresh events from demo panel
+    // Demo-panel actions and the 3s poll both arrive here
     this.refreshSubscription = this.refreshService.refresh$.subscribe(() => {
       this.loadOrders();
     });
@@ -430,37 +445,33 @@ export class OrdersListComponent implements OnInit, OnDestroy {
   }
 
   loadOrders() {
-    this.loading = true;
-    this.error = null;
+    // Spinner only on first load; background polls refresh silently
+    this.loading = !this.loadedOnce;
 
-    // Load REASSIGNMENT_PENDING orders (auto-replan orders)
-    this.apiService.getOrdersByStatus('REASSIGNMENT_PENDING').subscribe({
-      next: (reassignOrders) => {
-        // Load all suggestions
-        this.apiService.getSuggestions().subscribe({
-          next: (suggestions) => {
-            // Link suggestions to their orders by orderId
-            reassignOrders.forEach(order => {
-              order.suggestions = suggestions.filter(s => s.orderId === order.id);
-            });
-
-            // Show ONLY orders that have AGENT_OFFLINE suggestions (agentic loop)
-            const autoRePlanOrders = reassignOrders.filter(order =>
-              order.suggestions && order.suggestions.some((s: any) => s.triggerReason === 'AGENT_OFFLINE')
-            );
-
-            this.orders = autoRePlanOrders;
-            this.loading = false;
-            this.error = null;
-          },
-          error: () => {
-            this.orders = reassignOrders.map(o => ({ ...o, suggestions: [] }));
-            this.loading = false;
-          }
+    forkJoin({
+      orders: this.apiService.getOrdersByStatus('REASSIGNMENT_PENDING'),
+      suggestions: this.apiService.getSuggestions(),
+      agents: this.apiService.getAgents()
+    }).subscribe({
+      next: ({ orders, suggestions, agents }) => {
+        this.agents = agents;
+        // Every stranded order is shown; open (PENDING) suggestions inline, newest first
+        this.orders = orders.map(order => {
+          const forOrder = suggestions.filter((s: any) => s.orderId === order.id);
+          return {
+            ...order,
+            hadSuggestions: forOrder.length > 0,
+            suggestions: forOrder
+              .filter((s: any) => s.status === 'PENDING')
+              .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt))
+          };
         });
+        this.loading = false;
+        this.loadedOnce = true;
+        this.error = null;
       },
       error: (err) => {
-        this.error = 'Failed to load orders';
+        this.error = this.messageFrom(err, 'Failed to load orders');
         this.loading = false;
       }
     });
@@ -470,52 +481,32 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     this.loadOrders();
   }
 
+  agentName(agentId: string): string {
+    const agent = this.agents.find(a => a.id === agentId);
+    return agent ? `${agent.name} (${agentId})` : agentId;
+  }
+
   requestSuggestion(orderId: string) {
+    this.actionError = null;
+    this.requestingOrderId = orderId;
     this.apiService.getSuggestion(orderId).subscribe({
       next: () => {
+        this.requestingOrderId = null;
         this.loadOrders();
       },
-      error: () => {
-        this.error = 'Failed to get suggestion';
+      error: (err) => {
+        this.requestingOrderId = null;
+        this.actionError = this.messageFrom(err, 'Failed to get suggestion');
       }
     });
   }
 
   handleAccept(suggestionId: string) {
-    this.error = null;
-    this.apiService.acceptSuggestion(suggestionId).subscribe({
-      next: () => {
-        this.loadOrders();
-      },
-      error: (err) => {
-        console.error('Accept failed:', err);
-        this.error = 'Failed to accept suggestion';
-      }
-    });
+    this.decide(suggestionId, this.apiService.acceptSuggestion(suggestionId), 'Failed to accept suggestion');
   }
 
   handleReject(suggestionId: string) {
-    this.error = null;
-    this.apiService.rejectSuggestion(suggestionId).subscribe({
-      next: () => {
-        this.loadOrders();
-      },
-      error: (err) => {
-        console.error('Reject failed:', err);
-        this.error = 'Failed to reject suggestion';
-      }
-    });
-  }
-
-  loadAgents() {
-    this.apiService.getAgents().subscribe({
-      next: (data) => {
-        this.agents = data;
-      },
-      error: (err) => {
-        console.error('Failed to load agents', err);
-      }
-    });
+    this.decide(suggestionId, this.apiService.rejectSuggestion(suggestionId), 'Failed to reject suggestion');
   }
 
   toggleReassignMode(orderId: string | null) {
@@ -529,20 +520,40 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     const selectedAgent = this.selectedAgentForReassign[orderId];
 
     if (!selectedAgent) {
-      this.error = 'Please select an agent';
+      this.actionError = 'Please select an agent';
       return;
     }
 
-    this.error = null;
+    this.actionError = null;
     this.apiService.manualReassign(orderId, selectedAgent).subscribe({
       next: () => {
         this.reassigningOrderId = null;
-        this.loadOrders();
+        this.refreshService.triggerRefresh();
       },
       error: (err) => {
-        console.error('Reassign failed:', err);
-        this.error = 'Failed to reassign order';
+        this.actionError = this.messageFrom(err, 'Failed to reassign order');
       }
     });
+  }
+
+  private decide(suggestionId: string, call: Observable<any>, fallbackMessage: string) {
+    this.actionError = null;
+    this.busySuggestionId = suggestionId;
+    call.subscribe({
+      next: () => {
+        this.busySuggestionId = null;
+        // Agent loads and the dispatch board change too
+        this.refreshService.triggerRefresh();
+      },
+      error: (err) => {
+        this.busySuggestionId = null;
+        this.actionError = this.messageFrom(err, fallbackMessage);
+      }
+    });
+  }
+
+  /** Backend errors carry { status, error, message }; show the message when there is one. */
+  private messageFrom(err: any, fallback: string): string {
+    return err?.error?.message ? `${fallback}: ${err.error.message}` : fallback;
   }
 }

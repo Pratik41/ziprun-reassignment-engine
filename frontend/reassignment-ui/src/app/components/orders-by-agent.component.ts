@@ -347,7 +347,8 @@ export class OrdersByAgentComponent implements OnInit, OnDestroy {
   }
 
   loadOrdersByAgent() {
-    this.loading = true;
+    // Spinner only on first load; background polls refresh silently
+    this.loading = this.agentOrders.length === 0;
     this.error = null;
 
     this.apiService.getAgents().subscribe({

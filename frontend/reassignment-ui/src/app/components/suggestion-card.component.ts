@@ -9,6 +9,8 @@ import { CommonModule } from '@angular/common';
     <div class="suggestion-card" [ngClass]="suggestion.triggerReason === 'AGENT_OFFLINE' ? 'replan-badge' : ''">
       @if (suggestion.triggerReason === 'AGENT_OFFLINE') {
         <div class="badge-replan">🔄 AUTO RE-PLAN</div>
+      } @else {
+        <div class="badge-manual">MANUAL REQUEST</div>
       }
 
       <div class="suggestion-content">
@@ -20,7 +22,7 @@ import { CommonModule } from '@angular/common';
         <div class="suggestion-info">
           <div class="recommended-agent">
             <label>Recommended Agent:</label>
-            <strong>{{ suggestion.recommendedAgentId }}</strong>
+            <strong>{{ agentName || suggestion.recommendedAgentId }}</strong>
           </div>
 
           <div class="confidence">
@@ -36,15 +38,20 @@ import { CommonModule } from '@angular/common';
           </div>
 
           <div class="reasoning">
-            <label>AI Reasoning:</label>
+            <label>
+              Reasoning
+              @if (suggestion.source) {
+                <span class="source-tag" [class.fallback]="isFallback()">{{ suggestion.source }}</span>
+              }
+            </label>
             <p class="reasoning-text">{{ suggestion.reasoning }}</p>
           </div>
         </div>
 
         <div class="actions">
           @if (suggestion.status === 'PENDING') {
-            <button (click)="onAccept()" class="btn btn-accept">✓ Accept</button>
-            <button (click)="onReject()" class="btn btn-reject">✗ Reject</button>
+            <button (click)="onAccept()" class="btn btn-accept" [disabled]="busy">✓ Accept</button>
+            <button (click)="onReject()" class="btn btn-reject" [disabled]="busy">✗ Reject</button>
           } @else {
             <span class="status-badge" [ngClass]="'status-' + suggestion.status.toLowerCase()">
               {{ suggestion.status }}
@@ -91,6 +98,35 @@ import { CommonModule } from '@angular/common';
       display: flex;
       align-items: center;
       gap: 6px;
+    }
+
+    .badge-manual {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      background: #f3f4f6;
+      color: #4b5563;
+      border: 1px solid #d1d5db;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+    }
+
+    .source-tag {
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: #e0f2fe;
+      color: #075985;
+    }
+
+    .source-tag.fallback {
+      background: #fef3c7;
+      color: #92400e;
     }
 
     .suggestion-content {
@@ -270,6 +306,8 @@ import { CommonModule } from '@angular/common';
 export class SuggestionCardComponent {
   @Input() suggestion: any;
   @Input() order: any;
+  @Input() agentName = '';
+  @Input() busy = false;
   @Output() accept = new EventEmitter<string>();
   @Output() reject = new EventEmitter<string>();
 
@@ -279,6 +317,11 @@ export class SuggestionCardComponent {
 
   onReject() {
     this.reject.emit(this.suggestion.id);
+  }
+
+  /** True when the AI was bypassed and a rule-based fallback produced this suggestion. */
+  isFallback(): boolean {
+    return (this.suggestion.source || '').includes('fallback');
   }
 
   getConfidenceClass(confidence: number): string {

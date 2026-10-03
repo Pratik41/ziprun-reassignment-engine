@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ApiService } from '../services/api.service';
 import { RefreshService } from '../services/refresh.service';
 import { AgentFilterPipe } from '../pipes/agent-filter.pipe';
+import { Subscription } from 'rxjs';
 
 @Component({
   selector: 'app-demo-panel',
@@ -12,6 +13,21 @@ import { AgentFilterPipe } from '../pipes/agent-filter.pipe';
   template: `
     <div class="demo-panel">
       <h3>🎮 Demo Controls</h3>
+
+      <div class="control-section">
+        <h4>⚙️ Routing Strategy <small class="hint">(switches at runtime, no restart)</small></h4>
+        <div class="status-buttons">
+          @for (name of availableStrategies; track name) {
+            <button
+              (click)="setStrategy(name)"
+              [class.active]="activeStrategy === name"
+              class="btn-sm btn-strategy"
+            >
+              {{ name }}
+            </button>
+          }
+        </div>
+      </div>
 
       <div class="control-section">
         <h4>1️⃣ Create Order</h4>
@@ -210,6 +226,21 @@ import { AgentFilterPipe } from '../pipes/agent-filter.pipe';
       transition: all 0.2s ease;
     }
 
+    .hint {
+      font-weight: 400;
+      color: #6b7280;
+    }
+
+    .btn-strategy {
+      color: #6366f1;
+      border-color: #6366f1;
+    }
+
+    .btn-strategy.active {
+      background: #6366f1;
+      color: white;
+    }
+
     .btn-available {
       color: #10b981;
       border-color: #10b981;
@@ -287,11 +318,33 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
   orderCreated = false;
   createdOrderId = '';
   agentStatusChanged = false;
+  activeStrategy = '';
+  availableStrategies: string[] = [];
+  private refreshSubscription: Subscription | null = null;
 
   constructor(private apiService: ApiService, private refreshService: RefreshService) {}
 
   ngOnInit() {
     this.loadAgents();
+    this.loadStrategy();
+    this.refreshSubscription = this.refreshService.refresh$.subscribe(() => this.loadAgents());
+  }
+
+  loadStrategy() {
+    this.apiService.getRoutingStrategy().subscribe({
+      next: (s) => {
+        this.activeStrategy = s.active;
+        this.availableStrategies = s.available;
+      },
+      error: (err) => console.error('Failed to load routing strategy', err)
+    });
+  }
+
+  setStrategy(name: string) {
+    this.apiService.setRoutingStrategy(name).subscribe({
+      next: (s) => this.activeStrategy = s.active,
+      error: (err) => alert('Failed to switch strategy: ' + (err.error?.message ?? 'unknown error'))
+    });
   }
 
   loadAgents() {
@@ -337,7 +390,7 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
         this.refreshNow();
       },
       error: (err) => {
-        alert('Failed to update agent status');
+        alert('Failed to update agent status: ' + (err.error?.message ?? 'unknown error'));
       }
     });
   }
@@ -348,5 +401,6 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
   }
 
   ngOnDestroy() {
+    this.refreshSubscription?.unsubscribe();
   }
 }
