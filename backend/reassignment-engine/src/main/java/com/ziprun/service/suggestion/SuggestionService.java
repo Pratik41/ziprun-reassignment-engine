@@ -72,7 +72,7 @@ public interface SuggestionService {
      * Order REASSIGNMENT_PENDING -> ASSIGNED and its PENDING suggestions EXPIRED,
      * in one transaction.
      *
-     * @throws com.ziprun.exception.InvalidStateException if the agent is still OFFLINE
+     * @throws com.ziprun.exception.InvalidStateException if the agent is not AVAILABLE
      *         or the order isn't REASSIGNMENT_PENDING
      */
     Order keepWithCurrentAgent(String orderId);

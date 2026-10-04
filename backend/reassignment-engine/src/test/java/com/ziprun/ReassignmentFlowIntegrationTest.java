@@ -256,6 +256,12 @@ class ReassignmentFlowIntegrationTest {
         // still offline: refused
         mvc.perform(post("/orders/ORD-001/keep")).andExpect(status().isConflict());
 
+        // online but BUSY (not taking orders): also refused
+        setAgentStatus("AGT-001", "BUSY");
+        mvc.perform(post("/orders/ORD-001/keep"))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("not AVAILABLE")));
+
         setAgentStatus("AGT-001", "AVAILABLE");
         mvc.perform(post("/orders/ORD-001/keep"))
             .andExpect(status().isOk())

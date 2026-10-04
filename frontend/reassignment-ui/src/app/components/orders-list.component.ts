@@ -57,7 +57,7 @@ interface LiveReasoning {
             <div class="order-group">
               @if (isAssignedAgentBack(order)) {
                 <div class="agent-back">
-                  <span>✅ {{ agentName(order.assignedAgentId) }} is back online. {{ order.id }} can stay with them.</span>
+                  <span>✅ {{ agentName(order.assignedAgentId) }} is available again. {{ order.id }} can stay with them.</span>
                   <button (click)="keepWithCurrentAgent(order.id)" class="btn-keep" [disabled]="keepingOrderId === order.id">
                     ↩ Keep with {{ agentFirstName(order.assignedAgentId) }}
                   </button>
@@ -622,10 +622,10 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     this.loadOrders();
   }
 
-  /** The order's own agent went offline earlier but is online again. */
+  /** The order's own agent went offline earlier and is AVAILABLE again (BUSY isn't taking orders). */
   isAssignedAgentBack(order: any): boolean {
     const agent = this.agents.find(a => a.id === order.assignedAgentId);
-    return !!agent && agent.status !== 'OFFLINE';
+    return !!agent && agent.status === 'AVAILABLE';
   }
 
   agentFirstName(agentId: string): string {
