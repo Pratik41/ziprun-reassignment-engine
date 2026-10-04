@@ -64,7 +64,7 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 | `POST` | `/orders/{id}/reassign` | manual override `{newAgentId}` |
 | `POST` | `/orders/{id}/keep` | original agent is back online: order returns to `ASSIGNED`, open suggestions `EXPIRED` |
 | `GET` | `/agents?status=` | |
-| `PATCH` | `/agents/{id}/status` | `OFFLINE` fires the agentic loop asynchronously; returns immediately |
+| `PATCH` | `/agents/{id}/status` | `OFFLINE` fires the agentic loop asynchronously; returns immediately. 409 if it would leave no AVAILABLE agent |
 | `GET` | `/suggestions?status=` | `PENDING`, `ACCEPTED`, `REJECTED`, `EXPIRED` (withdrawn by the system) |
 | `PATCH` | `/suggestions/{id}` | `{status: ACCEPTED | REJECTED}`. Accept reassigns the order atomically |
 | `GET` / `PUT` | `/routing/strategy` | view / switch active strategy at runtime `{strategy}` |
@@ -119,6 +119,6 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-37 tests:
+38 tests:
 - Unit: rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction.
-- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes offline; offline-mid-routing recommendation refused; keep-with-original-agent; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).
+- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes offline; offline-mid-routing recommendation refused; keep-with-original-agent; last AVAILABLE agent protected; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).

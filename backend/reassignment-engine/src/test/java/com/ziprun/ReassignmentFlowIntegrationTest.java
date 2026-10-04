@@ -186,6 +186,24 @@ class ReassignmentFlowIntegrationTest {
     }
 
     @Test
+    void lastAvailableAgentCannotGoBusyOrOfflineUntilAnotherIsAvailable() throws Exception {
+        // Seed: Rahul (AGT-002) and Kiran (AGT-004) are the only AVAILABLE agents
+        setAgentStatus("AGT-002", "BUSY");
+
+        for (String status : List.of("OFFLINE", "BUSY")) {
+            mvc.perform(patch("/agents/AGT-004/status").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"status\":\"" + status + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("only AVAILABLE agent")));
+        }
+        assertThat(agents.findById("AGT-004").orElseThrow().getStatus().name()).isEqualTo("AVAILABLE");
+
+        // Once someone else is AVAILABLE, it's allowed
+        setAgentStatus("AGT-001", "AVAILABLE");
+        setAgentStatus("AGT-004", "OFFLINE");
+    }
+
+    @Test
     void orderCanBeKeptWithItsAgentOnceTheyAreBack() throws Exception {
         setAgentStatus("AGT-001", "OFFLINE");
         awaitPendingReplans(3);

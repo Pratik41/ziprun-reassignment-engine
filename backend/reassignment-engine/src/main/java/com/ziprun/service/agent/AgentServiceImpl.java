@@ -64,6 +64,9 @@ public class AgentServiceImpl implements AgentService {
             .orElseThrow(() -> new NotFoundException("Agent", agentId));
 
         AgentStatus oldStatus = agent.getStatus();
+        if (oldStatus == AgentStatus.AVAILABLE && newStatus != AgentStatus.AVAILABLE) {
+            ensureAnotherAgentStaysAvailable(agent, newStatus);
+        }
         agent.setStatus(newStatus);
 
         // Critical: Publish event if status changes to OFFLINE.
@@ -76,6 +79,22 @@ public class AgentServiceImpl implements AgentService {
 
         log.info("Agent status updated: id={}, oldStatus={}, newStatus={}", agentId, oldStatus, newStatus);
         return agent;
+    }
+
+    /**
+     * Fleet rule: at least one agent must stay AVAILABLE, otherwise routing has no
+     * candidates and stranded orders can't get suggestions. Taking the last
+     * AVAILABLE agent to BUSY/OFFLINE is refused until someone else is AVAILABLE.
+     * The AVAILABLE rows are locked so concurrent requests can't both pass.
+     */
+    private void ensureAnotherAgentStaysAvailable(Agent agent, AgentStatus newStatus) {
+        boolean anotherAvailable = agentRepository.findByStatusForUpdate(AgentStatus.AVAILABLE).stream()
+            .anyMatch(other -> !other.getId().equals(agent.getId()));
+        if (!anotherAvailable) {
+            throw new InvalidStateException(String.format(
+                "%s is the only AVAILABLE agent and can't be set to %s. Make another agent AVAILABLE first.",
+                agent.getName(), newStatus));
+        }
     }
 
     @Override

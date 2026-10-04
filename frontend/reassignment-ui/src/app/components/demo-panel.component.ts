@@ -52,11 +52,16 @@ import { Subscription } from 'rxjs';
       </div>
 
       <div class="control-section">
-        <h4>2️⃣ Agent Status Control</h4>
+        <h4>2️⃣ Agent Status Control <small class="hint">(at least one agent must stay Available)</small></h4>
         <div class="agents-control">
           @for (agent of agents; track agent.id) {
             <div class="agent-control">
-              <span class="agent-label">{{ agent.name }}</span>
+              <span class="agent-label">
+                {{ agent.name }}
+                @if (isLastAvailable(agent)) {
+                  <small class="last-available">only Available agent</small>
+                }
+              </span>
               <div class="status-buttons">
                 <button
                   (click)="setAgentStatus(agent.id, 'AVAILABLE')"
@@ -68,6 +73,8 @@ import { Subscription } from 'rxjs';
                 <button
                   (click)="setAgentStatus(agent.id, 'BUSY')"
                   [class.active]="agent.status === 'BUSY'"
+                  [disabled]="isLastAvailable(agent)"
+                  [title]="isLastAvailable(agent) ? lastAvailableHint : ''"
                   class="btn-sm btn-busy"
                 >
                   🟠 Busy
@@ -75,6 +82,8 @@ import { Subscription } from 'rxjs';
                 <button
                   (click)="setAgentStatus(agent.id, 'OFFLINE')"
                   [class.active]="agent.status === 'OFFLINE'"
+                  [disabled]="isLastAvailable(agent)"
+                  [title]="isLastAvailable(agent) ? lastAvailableHint : ''"
                   class="btn-sm btn-offline"
                 >
                   🔴 Offline
@@ -231,6 +240,18 @@ import { Subscription } from 'rxjs';
       color: #6b7280;
     }
 
+    .last-available {
+      display: block;
+      font-weight: 500;
+      font-size: 0.72rem;
+      color: #047857;
+    }
+
+    .btn-sm:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
     .btn-strategy {
       color: #6366f1;
       border-color: #6366f1;
@@ -318,6 +339,7 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
   orderCreated = false;
   createdOrderId = '';
   agentStatusChanged = false;
+  readonly lastAvailableHint = 'This is the only Available agent. Make another agent Available first.';
   activeStrategy = '';
   availableStrategies: string[] = [];
   private refreshSubscription: Subscription | null = null;
@@ -379,6 +401,12 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
         alert('Failed to create order: ' + err.error?.message);
       }
     });
+  }
+
+  /** Mirrors the backend rule: the last Available agent can't go Busy/Offline. */
+  isLastAvailable(agent: any): boolean {
+    return agent.status === 'AVAILABLE'
+      && this.agents.filter(a => a.status === 'AVAILABLE').length === 1;
   }
 
   setAgentStatus(agentId: string, status: string) {

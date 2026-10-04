@@ -245,6 +245,8 @@ Option 2. The loop only ever creates PENDING suggestions; nothing in `ReplanEven
 
 **When I'd remove the checkpoint:** for re-plans where (a) the suggestion came from the AI rather than a fallback, (b) confidence ≥ 0.9, (c) the recommended agent's effective load stays below `maxCapacity`, and (d) the order's SLA would breach before a typical ops response time. That requires Sprint 2 capacity and Sprint 3 SLA data, and an audit trail of auto-decisions before it's trusted.
 
+**Fleet guardrail: at least one agent stays AVAILABLE.** Taking the last AVAILABLE agent to BUSY or OFFLINE is refused with 409 ("make another agent AVAILABLE first"). Otherwise routing would have no candidates, and every stranded order would sit without a suggestion. The check locks the AVAILABLE rows (`AgentRepository.findByStatusForUpdate`), so two concurrent requests can't both remove the last two. The UI disables those buttons and says why. *Trade-off:* this models the ops console, where a human is changing statuses. In production, an agent's own app reporting OFFLINE (a crash, a breakdown) is a fact, not a request, and can't be refused. That path would bypass the rule and page ops instead.
+
 **Tradeoffs accepted**  
 Recovery speed is bounded by ops response time. That is the intended trade: wrong automatic reassignments cost more than a minute of delay.
 
