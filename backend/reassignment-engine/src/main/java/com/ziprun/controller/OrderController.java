@@ -214,12 +214,12 @@ public class OrderController {
     }
 
     /**
-     * POST /orders/{id}/reassign - Manual reassignment by ops (override AI).
+     * POST /orders/{id}/reassign - Manual reassignment by ops (override AI); expires the order's open suggestions.
      * Request: { "newAgentId": "AGT-002" }
      */
     @PostMapping("/{id}/reassign")
     public Order manualReassign(@PathVariable String id, @Valid @RequestBody ManualReassignRequest request) {
-        return orderService.reassignToAgent(id, request.newAgentId());
+        return suggestionService.reassignManually(id, request.newAgentId());
     }
 
     /**

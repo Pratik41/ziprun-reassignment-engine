@@ -205,6 +205,30 @@ class ReassignmentFlowIntegrationTest {
     }
 
     @Test
+    void manualReassignMovesTheOrderAndRetiresItsSuggestions() throws Exception {
+        setAgentStatus("AGT-001", "OFFLINE");
+        awaitPendingReplans(3);
+        int priyaBefore = agents.findById("AGT-001").orElseThrow().getActiveOrderCount();
+
+        // Ops overrides the AI and gives ORD-001 to Ananya (BUSY, allowed as an override)
+        mvc.perform(post("/orders/ORD-001/reassign").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"newAgentId\":\"AGT-003\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("REASSIGNED"))
+            .andExpect(jsonPath("$.assignedAgentId").value("AGT-003"));
+
+        assertThat(suggestions.findByOrderId("ORD-001")).extracting(ReassignmentSuggestion::getStatus)
+            .containsOnly(SuggestionStatus.EXPIRED);
+        assertThat(agents.findById("AGT-001").orElseThrow().getActiveOrderCount()).isEqualTo(priyaBefore - 1);
+
+        // Offline target and the order's own agent are refused with a reason
+        mvc.perform(post("/orders/ORD-002/reassign").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"newAgentId\":\"AGT-001\"}"))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").exists());
+    }
+
+    @Test
     void lastAvailableAgentCannotGoBusyOrOfflineUntilAnotherIsAvailable() throws Exception {
         // Seed: Rahul (AGT-002) and Kiran (AGT-004) are the only AVAILABLE agents
         setAgentStatus("AGT-002", "BUSY");

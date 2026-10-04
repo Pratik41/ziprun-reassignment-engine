@@ -195,15 +195,26 @@ public class SuggestionServiceImpl implements SuggestionService {
         }
         // updateStatus refuses if the agent is still OFFLINE
         Order kept = orderService.updateStatus(orderId, OrderStatus.ASSIGNED);
+        expirePendingFor(orderId);
+        log.info("Order {} kept with original agent {} (back online); pending suggestions expired",
+            orderId, kept.getAssignedAgentId());
+        return kept;
+    }
 
+    @Override
+    public Order reassignManually(String orderId, String newAgentId) {
+        Order moved = orderService.reassignToAgent(orderId, newAgentId);
+        expirePendingFor(orderId);
+        log.info("Order {} manually reassigned to {}; open suggestions expired", orderId, newAgentId);
+        return moved;
+    }
+
+    private void expirePendingFor(String orderId) {
         LocalDateTime now = LocalDateTime.now();
         suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING).forEach(s -> {
             s.setStatus(SuggestionStatus.EXPIRED);
             s.setDecidedAt(now);
         });
-        log.info("Order {} kept with original agent {} (back online); pending suggestions expired",
-            orderId, kept.getAssignedAgentId());
-        return kept;
     }
 
     private static String truncate(String reasoning) {

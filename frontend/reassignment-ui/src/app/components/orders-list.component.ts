@@ -74,6 +74,11 @@ interface LiveReasoning {
                     (reject)="handleReject($event)"
                   ></app-suggestion-card>
                 }
+                @if (reassigningOrderId !== order.id) {
+                  <div class="manual-row">
+                    <button (click)="toggleReassignMode(order.id)" class="btn-link">🔄 Reassign manually instead</button>
+                  </div>
+                }
               } @else {
                 <div class="no-suggestion-card">
                   <div class="no-sugg-content">
@@ -104,23 +109,36 @@ interface LiveReasoning {
                       <p class="live-text">{{ live.text }}<span class="cursor">▍</span></p>
                     </div>
                   }
+                </div>
+              }
 
-                  @if (reassigningOrderId === order.id) {
-                    <div class="reassign-panel">
-                      <label>Select new agent:</label>
+              @if (reassigningOrderId === order.id) {
+                <div class="reassign-panel">
+                  @if (reassignTargets(order); as targets) {
+                    @if (targets.length > 0) {
+                      <label>Reassign {{ order.id }} to:</label>
                       <select [(ngModel)]="selectedAgentForReassign[order.id]" class="agent-select">
                         <option value="">-- Choose Agent --</option>
-                        @for (agent of agents; track agent.id) {
-                          <option [value]="agent.id">{{ agent.name }} ({{ agent.status }})</option>
+                        @for (agent of targets; track agent.id) {
+                          <option [value]="agent.id">
+                            {{ agent.name }} · {{ agent.activeOrderCount }} orders{{ agent.status === 'BUSY' ? ' · BUSY (override)' : '' }}
+                          </option>
                         }
                       </select>
-                      <button (click)="submitReassign(order.id)" class="btn-confirm">
-                        ✓ Confirm
+                      <button (click)="submitReassign(order.id)" class="btn-confirm"
+                              [disabled]="!selectedAgentForReassign[order.id] || submittingReassignId === order.id">
+                        {{ submittingReassignId === order.id ? 'Saving…' : '✓ Confirm' }}
                       </button>
-                      <button (click)="toggleReassignMode(null)" class="btn-cancel">
-                        ✕ Cancel
-                      </button>
-                    </div>
+                    } @else {
+                      <span class="reassign-none">
+                        No other agent is online to take this order.
+                        @if (isAssignedAgentBack(order)) { Use "Keep with {{ agentFirstName(order.assignedAgentId) }}" above. }
+                      </span>
+                    }
+                  }
+                  <button (click)="toggleReassignMode(null)" class="btn-cancel">✕ Cancel</button>
+                  @if (reassignErrors[order.id]) {
+                    <div class="reassign-error">⚠️ {{ reassignErrors[order.id] }}</div>
                   }
                 </div>
               }
@@ -131,6 +149,34 @@ interface LiveReasoning {
     </div>
   `,
   styles: [`
+    .manual-row {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 6px;
+    }
+
+    .btn-link {
+      background: none;
+      border: none;
+      color: #4b5563;
+      font-size: 0.82rem;
+      text-decoration: underline;
+      cursor: pointer;
+      padding: 2px 4px;
+    }
+
+    .reassign-none {
+      font-size: 0.85rem;
+      color: #92400e;
+    }
+
+    .reassign-error {
+      flex-basis: 100%;
+      margin-top: 6px;
+      font-size: 0.85rem;
+      color: #b91c1c;
+    }
+
     .agent-back {
       display: flex;
       justify-content: space-between;
@@ -515,6 +561,8 @@ export class OrdersListComponent implements OnInit, OnDestroy {
   actionError: string | null = null;
   busySuggestionId: string | null = null;
   keepingOrderId: string | null = null;
+  submittingReassignId: string | null = null;
+  reassignErrors: { [orderId: string]: string } = {};
   streams: { [orderId: string]: LiveReasoning } = {};
   private streamCancels: { [orderId: string]: () => void } = {};
   reassigningOrderId: string | null = null;
@@ -651,25 +699,40 @@ export class OrdersListComponent implements OnInit, OnDestroy {
     this.reassigningOrderId = orderId;
     if (orderId) {
       this.selectedAgentForReassign[orderId] = '';
+      delete this.reassignErrors[orderId];
     }
+  }
+
+  /**
+   * Agents an order can be moved to by hand: online (not OFFLINE) and not the
+   * order's own agent. AVAILABLE first; BUSY is allowed as an explicit ops override.
+   */
+  reassignTargets(order: any): any[] {
+    return this.agents
+      .filter(a => a.status !== 'OFFLINE' && a.id !== order.assignedAgentId)
+      .sort((a, b) => (a.status === 'AVAILABLE' ? 0 : 1) - (b.status === 'AVAILABLE' ? 0 : 1)
+        || a.activeOrderCount - b.activeOrderCount);
   }
 
   submitReassign(orderId: string) {
     const selectedAgent = this.selectedAgentForReassign[orderId];
-
     if (!selectedAgent) {
-      this.actionError = 'Please select an agent';
+      this.reassignErrors[orderId] = 'Choose an agent first';
       return;
     }
 
-    this.actionError = null;
+    delete this.reassignErrors[orderId];
+    this.submittingReassignId = orderId;
     this.apiService.manualReassign(orderId, selectedAgent).subscribe({
       next: () => {
+        this.submittingReassignId = null;
         this.reassigningOrderId = null;
         this.refreshService.triggerRefresh();
       },
       error: (err) => {
-        this.actionError = this.messageFrom(err, 'Failed to reassign order');
+        this.submittingReassignId = null;
+        // Shown inside the panel, next to the button that was clicked
+        this.reassignErrors[orderId] = err?.error?.message ?? 'Failed to reassign order';
       }
     });
   }

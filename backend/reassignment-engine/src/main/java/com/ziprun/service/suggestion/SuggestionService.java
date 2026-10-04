@@ -76,4 +76,11 @@ public interface SuggestionService {
      *         or the order isn't REASSIGNMENT_PENDING
      */
     Order keepWithCurrentAgent(String orderId);
+
+    /**
+     * Ops override: move the order to an agent of their choosing (not a suggestion).
+     * The order's open suggestions are EXPIRED in the same transaction, so none can
+     * be accepted later and move the order again.
+     */
+    Order reassignManually(String orderId, String newAgentId);
 }
