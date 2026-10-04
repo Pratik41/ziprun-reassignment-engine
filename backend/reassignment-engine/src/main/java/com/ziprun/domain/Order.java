@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
  *
  * Key design decisions:
  * 1. State machine: ASSIGNED → REASSIGNMENT_PENDING → REASSIGNED → DELIVERED
- * 2. pickupZone and dropoffZone are nullable, reserved for Sprint 2 zone-aware routing
+ * 2. pickupZone, dropoffZone and slaDeadline are nullable, reserved for planned
+ *    zone-aware routing and SLA-driven re-planning (see Roadmap in README)
  * 3. Suggestions are queried by orderId via repository (no bidirectional relationship)
  * 4. createdAt tracks when order was assigned
  */
@@ -34,25 +35,21 @@ public class Order {
     private LocalDateTime createdAt;
 
     /**
-     * Sprint 2: Zone awareness
-     * Pickup location zone (e.g., "KORAMANGALA", "HSR_LAYOUT")
-     * Nullable for now; used by ZoneAffinityStrategy in Sprint 2
+     * Pickup location zone (e.g., "KORAMANGALA", "HSR_LAYOUT").
+     * Nullable; shown to the AI when set, and the input for a planned zone-affinity strategy.
      */
     @Column(nullable = true)
     private String pickupZone;
 
     /**
-     * Sprint 2: Zone awareness
-     * Dropoff location zone
-     * Nullable for now; used by ZoneAffinityStrategy in Sprint 2
+     * Dropoff location zone. Nullable; see pickupZone.
      */
     @Column(nullable = true)
     private String dropoffZone;
 
     /**
-     * Sprint 3: SLA deadlines
-     * When set, a scheduled SLA monitor can publish a re-plan trigger as the
-     * deadline approaches (see ADR-5). Nullable; unused in Sprint 1.
+     * Delivery deadline. Nullable and not used yet: a planned SLA monitor will
+     * trigger a re-plan as the deadline approaches (see ADR-5).
      */
     @Column(nullable = true)
     private LocalDateTime slaDeadline;

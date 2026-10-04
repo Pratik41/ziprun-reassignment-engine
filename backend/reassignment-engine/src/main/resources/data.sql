@@ -1,4 +1,4 @@
--- Seed data (hackathon brief, Addendum A): 5 agents, 8 pre-assigned orders.
+-- Sample data: 5 agents, 8 pre-assigned orders (Bengaluru routes).
 -- Runs on every startup but only inserts into an empty database, so a local
 -- H2 file with your own test data is never overwritten.
 -- active_order_count matches the number of orders assigned to each agent.

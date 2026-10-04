@@ -13,7 +13,7 @@ import java.util.function.Consumer;
 
 /**
  * Google Gemini via the generateContent REST API.
- * Based on the hackathon brief's Addendum B, with timeouts and typed errors.
+ * Request/response handling with explicit timeouts and typed errors.
  *
  * Config: llm.gemini.api-key, llm.gemini.model, llm.gemini.base-url
  */

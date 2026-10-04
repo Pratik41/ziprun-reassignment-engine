@@ -83,7 +83,7 @@ public class AIAdvisorService {
 
     /**
      * Accepts either {"recommendations":[{...},...]} (what we ask for) or a single
-     * {"agent_id"|"agentId", "confidence", "reasoning"} object (the brief's format),
+     * {"agent_id"|"agentId", "confidence", "reasoning"} object (camelCase also accepted),
      * optionally wrapped in markdown fences or surrounded by prose.
      */
     List<AIRecommendationOption> parse(String raw) {

@@ -5,7 +5,7 @@ import com.ziprun.domain.Order;
 import java.util.List;
 
 /**
- * The routing contract. Every strategy (rule-based, AI, Sprint 2's zone
+ * The routing contract. Every strategy (rule-based, AI, a future zone
  * affinity) implements this and is registered as a Spring bean whose bean
  * name is its strategy name, e.g. {@code @Component("zone-affinity")}.
  * RoutingService discovers it automatically; nothing else changes.

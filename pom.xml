@@ -12,7 +12,7 @@
 
     <name>ZipRun Reassignment Engine</name>
     <description>AI-powered order reassignment system for delivery fleets</description>
-    <url>https://github.com/yourusername/ziprun-reassignment-engine</url>
+    <url>https://github.com/Pratik41/ziprun-reassignment-engine</url>
 
     <modules>
         <module>backend/reassignment-engine</module>
@@ -25,5 +25,4 @@
         <spring-boot.version>3.3.0</spring-boot.version>
     </properties>
 
-    <description>Parent project for ZipRun AI Reassignment Engine (5-hour hackathon)</description>
 </project>

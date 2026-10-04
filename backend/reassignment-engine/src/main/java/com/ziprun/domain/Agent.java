@@ -10,9 +10,9 @@ import jakarta.persistence.*;
  *    agents are routing candidates. activeOrderCount is the load metric routing uses.
  * 2. Load changes go through assignOrder()/releaseOrder() so the counter can't be
  *    corrupted by ad-hoc arithmetic in services.
- * 3. currentZone and maxCapacity are nullable Sprint 2 placeholders (zone affinity,
- *    capacity limits). Adding them now means Sprint 2 activates columns instead of
- *    running a migration.
+ * 3. currentZone and maxCapacity are nullable placeholders for planned zone-affinity
+ *    routing and capacity limits; when those land they populate existing columns
+ *    instead of needing a migration.
  */
 @Entity
 @Table(name = "agents")
@@ -32,17 +32,14 @@ public class Agent {
     private Integer activeOrderCount;
 
     /**
-     * Sprint 2: Zone awareness
-     * Tracks which zone the agent is currently in
-     * Nullable for now; used by ZoneAffinityStrategy when added
+     * Zone the agent is currently in. Nullable; input for a planned zone-affinity strategy.
      */
     @Column(nullable = true)
     private String currentZone;
 
     /**
-     * Sprint 2: Capacity constraints
-     * Maximum concurrent orders; null means "no limit configured yet".
-     * Routing strategies will filter on activeOrderCount < maxCapacity once populated.
+     * Maximum concurrent orders; null means "no limit configured".
+     * Not enforced yet: routing will filter on activeOrderCount < maxCapacity once populated.
      */
     @Column(nullable = true)
     private Integer maxCapacity;

@@ -14,7 +14,7 @@ import java.util.Map;
  *  - HTTP  POST /orders/{id}/suggest  -> RoutingContext.initial()
  *  - async ReplanEventHandler         -> RoutingContext.agentOffline(...)
  * Strategies that care (AI picks a different prompt) read it; strategies that
- * don't (rule-based) mostly ignore it. Sprint 3's SLA monitor would add a new
+ * don't (rule-based) mostly ignore it. A future SLA monitor would add a new
  * TriggerReason and factory method here, not a new routing method.
  *
  * pendingLoad: PENDING suggestions already pointing at each agent. Filled in by

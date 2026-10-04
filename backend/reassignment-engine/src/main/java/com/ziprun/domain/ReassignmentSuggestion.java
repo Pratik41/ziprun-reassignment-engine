@@ -9,13 +9,13 @@ import java.time.LocalDateTime;
  * Key design decisions:
  * 1. Stores AI's confidence score (0.0-1.0) and plain-English reasoning for ops
  * 2. triggerReason distinguishes agentic loop (AGENT_OFFLINE) from manual requests (INITIAL)
- * 3. Status tracks: PENDING (waiting for ops decision) → ACCEPTED or REJECTED
+ * 3. Status tracks: PENDING (waiting for ops decision) → ACCEPTED, REJECTED or EXPIRED
  * 4. Queryable: ReplanEventHandler checks for existing PENDING AGENT_OFFLINE suggestions (idempotency)
  *
  * This entity is central to the entire system:
- * - Created by T-2 (routing engine on-demand)
- * - Created by T-4 (agentic loop after agent offline)
- * - Updated by ops interface (accept/reject in T-5)
+ * - Created on demand (POST /orders/{id}/suggest, triggerReason INITIAL)
+ * - Created by the agentic loop when agent availability changes (triggerReason AGENT_OFFLINE)
+ * - Decided by ops in the UI (PATCH /suggestions/{id}: accept / reject)
  */
 @Entity
 @Table(name = "reassignment_suggestions")
@@ -65,7 +65,7 @@ public class ReassignmentSuggestion {
 
     /**
      * Which strategy actually produced this suggestion, e.g. "ai", "rule-based",
-     * or "rule-based (AI fallback: TIMEOUT)". Lets ops (and the walkthrough) see
+     * or "rule-based (AI fallback: TIMEOUT)". Lets ops see
      * when the AI was bypassed instead of the fallback being invisible.
      */
     @Column(nullable = true)
