@@ -13,14 +13,34 @@ jobs:
       run:
         working-directory: backend/reassignment-engine
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: maven
       # Tests use an in-memory H2 DB and a test-only fake LLM: no API keys needed
       - run: mvn -B test
+
+      # Surface failing tests as annotations (visible on the run page and via the API without signing in)
+      - name: Report failed tests
+        if: failure()
+        run: |
+          for f in target/surefire-reports/*.txt; do
+            [ -f "$f" ] || continue
+            if grep -qE '<<< (FAILURE|ERROR)!' "$f"; then
+              grep -E '<<< (FAILURE|ERROR)!' -A 2 "$f" | grep -v '^--$' | while IFS= read -r line; do
+                echo "::error title=$(basename "$f" .txt)::${line}"
+              done
+            fi
+          done
+
+      - name: Upload test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: backend/reassignment-engine/target/surefire-reports/
 
   frontend:
     name: Frontend (Angular production build)
@@ -29,8 +49,8 @@ jobs:
       run:
         working-directory: frontend/reassignment-ui
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: '20'
           cache: npm
