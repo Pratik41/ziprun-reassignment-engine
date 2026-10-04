@@ -8,6 +8,7 @@ This project automates that recovery. When an agent goes offline, the system fin
 
 - **Backend:** Spring Boot 3.3 · Java 17 · H2 · `backend/reassignment-engine`
 - **Frontend:** Angular 17 · `frontend/reassignment-ui`
+- **How it works (diagrams + detail):** [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)
 - **Design decisions:** [ADR.md](ADR.md)
 
 ## Features
@@ -109,22 +110,21 @@ All settings live in `application.properties` and can be overridden with environ
 
 ## How it works
 
+```mermaid
+flowchart LR
+    A["Agent status changes<br/>PATCH /agents/{id}/status"] -- "event, after commit,<br/>in the background" --> B["ReplanEventHandler<br/>which orders need a new agent?"]
+    B --> C{"Active strategy"}
+    C -- "rule-based" --> D["Lowest effective load<br/>(instant, deterministic)"]
+    C -- "ai" --> E["Gemini, then Groq<br/>answer checked against roster"]
+    E -- "any failure" --> D
+    D --> F["PENDING suggestion<br/>agent + confidence + reasoning"]
+    E --> F
+    F --> G{"Ops decides"}
+    G -- "Accept" --> H["Order moves"]
+    G -- "Reject / reassign / keep" --> I["Ops stays in control"]
 ```
-PATCH /agents/{id}/status
-  └─ AgentServiceImpl ── publishes AgentOffline / AgentBusy / AgentAvailable event ──► returns 200
-                                    │ @Async @TransactionalEventListener(AFTER_COMMIT)
-                                    ▼
-                         ReplanEventHandler  (observe → reason → act)
-                           1. work out which orders are affected
-                           2. withdraw suggestions that are now stale
-                           3. per order: RoutingService.route(order, RoutingContext.agentOffline(...))
-                                ├─ "ai"         → AIAdvisorService → re-plan prompt → LLMGateway (gemini → groq)
-                                │                   validate agent ids / confidence, else fall back ─┐
-                                └─ "rule-based" → least effective load ◄──────────────────────────────┘
-                           4. SuggestionService.createReplanSuggestionIfAbsent (idempotent, row-locked)
-                                    ▼
-                         PENDING suggestion ──► ops decides: PATCH /suggestions/{id}
-```
+
+**Full explanation with diagrams:** [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) covers the agentic loop step by step, how the rule-based and AI strategies decide (with worked numbers), the AI safety net, lifecycles, streaming, guardrails, limitations and troubleshooting.
 
 Key files (under `backend/reassignment-engine/src/main/java/com/ziprun/`):
 - `routing/RoutingStrategy.java`: the contract; `routing/strategy/*`: the implementations
