@@ -7,10 +7,17 @@ import { CommonModule } from '@angular/common';
   imports: [CommonModule],
   template: `
     <div class="suggestion-card" [ngClass]="suggestion.triggerReason === 'AGENT_OFFLINE' ? 'replan-badge' : ''">
+      <!-- Labels, not buttons: they show what created this suggestion -->
       @if (suggestion.triggerReason === 'AGENT_OFFLINE') {
-        <div class="badge-replan">🔄 AUTO RE-PLAN</div>
+        <span class="trigger-tag badge-replan"
+              title="Created automatically by the system when the assigned agent went offline. No one requested it.">
+          ⚡ Auto re-plan · agent went offline
+        </span>
       } @else {
-        <div class="badge-manual">MANUAL REQUEST</div>
+        <span class="trigger-tag badge-manual"
+              title="Created because someone clicked 'Get Suggestion' for this order.">
+          Requested manually
+        </span>
       }
 
       <div class="suggestion-content">
@@ -82,36 +89,29 @@ import { CommonModule } from '@angular/common';
       background: linear-gradient(135deg, #eff6ff 0%, white 100%);
     }
 
-    .badge-replan {
+    /* Flat tags (no gradient/shadow) so they don't read as clickable buttons */
+    .trigger-tag {
       position: absolute;
       top: 14px;
       right: 14px;
-      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-      color: white;
-      padding: 6px 14px;
-      border-radius: 20px;
-      font-size: 0.75rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.3px;
-      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
-      display: flex;
-      align-items: center;
-      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 4px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: help;
+      user-select: none;
+    }
+
+    .badge-replan {
+      background: #dbeafe;
+      color: #1e40af;
+      border: 1px solid #93c5fd;
     }
 
     .badge-manual {
-      position: absolute;
-      top: 14px;
-      right: 14px;
       background: #f3f4f6;
       color: #4b5563;
       border: 1px solid #d1d5db;
-      padding: 5px 12px;
-      border-radius: 20px;
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 0.3px;
     }
 
     .source-tag {
