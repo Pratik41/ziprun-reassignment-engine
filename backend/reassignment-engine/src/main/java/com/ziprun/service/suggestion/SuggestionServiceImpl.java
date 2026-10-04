@@ -59,10 +59,10 @@ public class SuggestionServiceImpl implements SuggestionService {
     @Override
     public ReassignmentSuggestion createSuggestion(String orderId, RoutingResult result, TriggerReason triggerReason) {
         // Routing read the roster before (possibly slow) LLM calls; re-check right before saving
-        boolean stillOnline = agentRepository.findById(result.getRecommendedAgentId())
-            .map(agent -> agent.getStatus() != AgentStatus.OFFLINE)
+        boolean stillAvailable = agentRepository.findById(result.getRecommendedAgentId())
+            .map(agent -> agent.getStatus() == AgentStatus.AVAILABLE)
             .orElse(false);
-        if (!stillOnline) {
+        if (!stillAvailable) {
             throw new StaleRecommendationException(result.getRecommendedAgentId());
         }
 
@@ -140,7 +140,16 @@ public class SuggestionServiceImpl implements SuggestionService {
 
         LocalDateTime now = LocalDateTime.now();
         if (newStatus == SuggestionStatus.ACCEPTED) {
-            // Throws (and rolls back the whole decision) if e.g. the agent went offline meanwhile
+            // A suggestion is a recommendation to give an AVAILABLE agent one more order;
+            // if they've since gone BUSY or OFFLINE, ops should get a fresh suggestion instead
+            agentRepository.findById(suggestion.getRecommendedAgentId())
+                .filter(agent -> agent.getStatus() != AgentStatus.AVAILABLE)
+                .ifPresent(agent -> {
+                    throw new InvalidStateException(String.format(
+                        "%s is %s now and isn't taking new orders; request a new suggestion",
+                        agent.getName(), agent.getStatus()));
+                });
+            // Throws (and rolls back the whole decision) on any other conflict
             orderService.reassignToAgent(suggestion.getOrderId(), suggestion.getRecommendedAgentId());
 
             // Other open suggestions for this order are now moot
@@ -173,7 +182,7 @@ public class SuggestionServiceImpl implements SuggestionService {
         stale.forEach(s -> {
             s.setStatus(SuggestionStatus.EXPIRED);
             s.setDecidedAt(now);
-            log.info("Suggestion {} EXPIRED: recommended agent {} went OFFLINE (order {})", s.getId(), agentId, s.getOrderId());
+            log.info("Suggestion {} EXPIRED: recommended agent {} is no longer AVAILABLE (order {})", s.getId(), agentId, s.getOrderId());
         });
         return stale.stream().map(ReassignmentSuggestion::getOrderId).distinct().toList();
     }

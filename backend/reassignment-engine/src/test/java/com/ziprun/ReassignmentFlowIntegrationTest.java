@@ -175,6 +175,25 @@ class ReassignmentFlowIntegrationTest {
     }
 
     @Test
+    void suggestionsPointingAtAnAgentWhoGoesBusyAreWithdrawnAndReplanned() throws Exception {
+        setAgentStatus("AGT-001", "OFFLINE");
+        List<String> toRahul = awaitPendingReplans(3).stream()
+            .filter(s -> s.getRecommendedAgentId().equals("AGT-002")).map(ReassignmentSuggestion::getId).toList();
+        assertThat(toRahul).isNotEmpty();
+
+        // Rahul stops taking new orders (Kiran is still AVAILABLE, so this is allowed)
+        setAgentStatus("AGT-002", "BUSY");
+        List<ReassignmentSuggestion> after = await(this::pendingReplans,
+            list -> list.size() == 3 && list.stream().allMatch(s -> s.getRecommendedAgentId().equals("AGT-004")));
+
+        assertThat(after).hasSize(3);
+        assertThat(toRahul).allSatisfy(id ->
+            assertThat(suggestions.findById(id).orElseThrow().getStatus()).isEqualTo(SuggestionStatus.EXPIRED));
+        // BUSY doesn't strand Rahul's own work the way OFFLINE does
+        assertThat(orders.findByAssignedAgentIdAndStatus("AGT-002", OrderStatus.REASSIGNMENT_PENDING)).isEmpty();
+    }
+
+    @Test
     void suggestionForAnAgentWhoWentOfflineMidRoutingIsRefused() throws Exception {
         // Routing picked Kiran, but Kiran went offline before the suggestion was saved
         RoutingResult picked = new RoutingResult("AGT-004", 0.9, "Kiran is free", "ai:gemini");

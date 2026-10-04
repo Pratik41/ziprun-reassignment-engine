@@ -61,7 +61,7 @@ public interface SuggestionService {
 
     /**
      * Withdraws (EXPIRED) every PENDING suggestion that recommends this agent.
-     * Called by the agentic loop when the agent goes OFFLINE.
+     * Called by the agentic loop when the agent stops being AVAILABLE (BUSY or OFFLINE).
      *
      * @return ids of the orders whose suggestion was withdrawn
      */

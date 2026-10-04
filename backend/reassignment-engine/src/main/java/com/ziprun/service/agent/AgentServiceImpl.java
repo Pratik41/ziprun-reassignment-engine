@@ -2,6 +2,7 @@ package com.ziprun.service.agent;
 
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
+import com.ziprun.domain.event.AgentBusyEvent;
 import com.ziprun.domain.event.AgentOfflineEvent;
 import com.ziprun.exception.InvalidStateException;
 import com.ziprun.exception.NotFoundException;
@@ -75,6 +76,9 @@ public class AgentServiceImpl implements AgentService {
         if (newStatus == AgentStatus.OFFLINE && oldStatus != AgentStatus.OFFLINE) {
             log.info("Agent going OFFLINE: id={}, name={}. Publishing AgentOfflineEvent.", agentId, agent.getName());
             eventPublisher.publishEvent(new AgentOfflineEvent(this, agentId, agent.getName()));
+        } else if (oldStatus == AgentStatus.AVAILABLE && newStatus == AgentStatus.BUSY) {
+            // Still delivering their own orders, but no longer a valid recommendation
+            eventPublisher.publishEvent(new AgentBusyEvent(this, agentId, agent.getName()));
         }
 
         log.info("Agent status updated: id={}, oldStatus={}, newStatus={}", agentId, oldStatus, newStatus);
