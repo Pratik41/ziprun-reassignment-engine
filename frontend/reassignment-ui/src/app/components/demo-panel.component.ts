@@ -39,9 +39,9 @@ import { Subscription } from 'rxjs';
             class="input-field"
           />
           <select [(ngModel)]="selectedAgent" class="input-field">
-            <option value="">Select Agent</option>
-            @for (agent of agents; track agent.id) {
-              <option [value]="agent.id">{{ agent.name }} ({{ agent.status }})</option>
+            <option value="">Select Available Agent</option>
+            @for (agent of availableAgents(); track agent.id) {
+              <option [value]="agent.id">{{ agent.name }} · {{ agent.activeOrderCount }} orders</option>
             }
           </select>
           <button (click)="createOrder()" class="btn-primary">Create Order</button>
@@ -401,6 +401,11 @@ export class DemoPanelComponent implements OnInit, OnDestroy {
         alert('Failed to create order: ' + err.error?.message);
       }
     });
+  }
+
+  /** Only AVAILABLE agents take new orders (same rule as the backend). */
+  availableAgents(): any[] {
+    return this.agents.filter(a => a.status === 'AVAILABLE');
   }
 
   /** Mirrors the backend rule: the last Available agent can't go Busy/Offline. */

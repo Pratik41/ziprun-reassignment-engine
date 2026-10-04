@@ -55,13 +55,13 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/orders` | `{description, assignedAgentId}` → 201 |
+| `POST` | `/orders` | `{description, assignedAgentId}` → 201 (agent must be `AVAILABLE`) |
 | `GET` | `/orders?status=` | `ASSIGNED`, `REASSIGNMENT_PENDING`, `REASSIGNED`, `DELIVERED` |
 | `GET` | `/orders/{id}` | |
 | `PATCH` | `/orders/{id}/status` | state machine enforced (409 on illegal transition) |
 | `POST` | `/orders/{id}/suggest` | runs the active strategy, persists an `INITIAL` suggestion → 201 |
 | `POST` | `/orders/{id}/suggest/stream` | same, as Server-Sent Events: `start`, `token` (reasoning text as generated), `restart` (fallback), then `suggestion` or `error` |
-| `POST` | `/orders/{id}/reassign` | manual override `{newAgentId}` (any online agent except the current one; open suggestions for the order are `EXPIRED`) |
+| `POST` | `/orders/{id}/reassign` | manual override `{newAgentId}` (`AVAILABLE` agents only, not the current one; open suggestions for the order are `EXPIRED`) |
 | `POST` | `/orders/{id}/keep` | original agent is back online: order returns to `ASSIGNED`, open suggestions `EXPIRED` |
 | `GET` | `/agents?status=` | |
 | `PATCH` | `/agents/{id}/status` | `OFFLINE` fires the agentic loop asynchronously; returns immediately. 409 if it would leave no AVAILABLE agent |

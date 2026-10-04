@@ -21,7 +21,7 @@ import java.util.UUID;
  * Order Service Implementation: All order business logic lives here.
  *
  * Responsibilities:
- * - Create orders with validation (agent must exist and not be OFFLINE)
+ * - Create orders with validation (agent must exist and be AVAILABLE)
  * - Query orders by various criteria (status, agent, ID)
  * - Drive the Order state machine (transitions are defined on OrderStatus)
  * - Keep agent load (activeOrderCount) consistent when orders move between agents
@@ -46,8 +46,9 @@ public class OrderServiceImpl implements OrderService {
         log.debug("Creating order: description={}, agent={}", description, assignedAgentId);
 
         Agent agent = getAgent(assignedAgentId);
-        if (agent.getStatus() == AgentStatus.OFFLINE) {
-            throw new InvalidStateException("Cannot assign order to OFFLINE agent: " + assignedAgentId);
+        if (agent.getStatus() != AgentStatus.AVAILABLE) {
+            throw new InvalidStateException(String.format(
+                "%s is %s and isn't taking new orders; choose an AVAILABLE agent", agent.getName(), agent.getStatus()));
         }
 
         Order order = new Order();
@@ -131,12 +132,13 @@ public class OrderServiceImpl implements OrderService {
         Order order = getById(orderId);
         Agent newAgent = getAgent(newAgentId);
 
-        if (newAgent.getStatus() == AgentStatus.OFFLINE) {
-            throw new InvalidStateException(String.format(
-                "Agent %s is OFFLINE and cannot take order %s; request a new suggestion", newAgentId, orderId));
-        }
         if (newAgentId.equals(order.getAssignedAgentId())) {
             throw new InvalidStateException(String.format("Order %s is already assigned to %s", orderId, newAgentId));
+        }
+        // Only AVAILABLE agents take new orders (BUSY = still delivering, not taking more)
+        if (newAgent.getStatus() != AgentStatus.AVAILABLE) {
+            throw new InvalidStateException(String.format(
+                "%s is %s and isn't taking new orders; choose an AVAILABLE agent", newAgent.getName(), newAgent.getStatus()));
         }
 
         String oldAgentId = order.getAssignedAgentId();

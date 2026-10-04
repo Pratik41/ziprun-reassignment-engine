@@ -19,7 +19,7 @@ public interface OrderService {
      * Simulates morning manual assignment workflow.
      *
      * @throws com.ziprun.exception.NotFoundException if the agent doesn't exist
-     * @throws com.ziprun.exception.InvalidStateException if the agent is OFFLINE
+     * @throws com.ziprun.exception.InvalidStateException if the agent is not AVAILABLE
      */
     Order createOrder(String description, String assignedAgentId);
 
@@ -59,7 +59,7 @@ public interface OrderService {
      * suggestion and for manual overrides.
      *
      * @throws com.ziprun.exception.InvalidStateException if the order is DELIVERED,
-     *         the new agent is OFFLINE, or it's the same agent
+     *         the new agent isn't AVAILABLE, or it's the same agent
      */
     Order reassignToAgent(String orderId, String newAgentId);
 }

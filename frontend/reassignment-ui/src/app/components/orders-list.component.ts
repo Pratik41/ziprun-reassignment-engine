@@ -120,9 +120,7 @@ interface LiveReasoning {
                       <select [(ngModel)]="selectedAgentForReassign[order.id]" class="agent-select">
                         <option value="">-- Choose Agent --</option>
                         @for (agent of targets; track agent.id) {
-                          <option [value]="agent.id">
-                            {{ agent.name }} · {{ agent.activeOrderCount }} orders{{ agent.status === 'BUSY' ? ' · BUSY (override)' : '' }}
-                          </option>
+                          <option [value]="agent.id">{{ agent.name }} · {{ agent.activeOrderCount }} orders</option>
                         }
                       </select>
                       <button (click)="submitReassign(order.id)" class="btn-confirm"
@@ -131,7 +129,7 @@ interface LiveReasoning {
                       </button>
                     } @else {
                       <span class="reassign-none">
-                        No other agent is online to take this order.
+                        No other AVAILABLE agent can take this order. Make an agent Available in Demo Controls.
                         @if (isAssignedAgentBack(order)) { Use "Keep with {{ agentFirstName(order.assignedAgentId) }}" above. }
                       </span>
                     }
@@ -704,14 +702,13 @@ export class OrdersListComponent implements OnInit, OnDestroy {
   }
 
   /**
-   * Agents an order can be moved to by hand: online (not OFFLINE) and not the
-   * order's own agent. AVAILABLE first; BUSY is allowed as an explicit ops override.
+   * Agents an order can be moved to by hand: AVAILABLE only (same rule as the
+   * backend), excluding the order's own agent. Least-loaded first.
    */
   reassignTargets(order: any): any[] {
     return this.agents
-      .filter(a => a.status !== 'OFFLINE' && a.id !== order.assignedAgentId)
-      .sort((a, b) => (a.status === 'AVAILABLE' ? 0 : 1) - (b.status === 'AVAILABLE' ? 0 : 1)
-        || a.activeOrderCount - b.activeOrderCount);
+      .filter(a => a.status === 'AVAILABLE' && a.id !== order.assignedAgentId)
+      .sort((a, b) => a.activeOrderCount - b.activeOrderCount);
   }
 
   submitReassign(orderId: string) {

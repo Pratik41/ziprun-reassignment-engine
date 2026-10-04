@@ -210,22 +210,24 @@ class ReassignmentFlowIntegrationTest {
         awaitPendingReplans(3);
         int priyaBefore = agents.findById("AGT-001").orElseThrow().getActiveOrderCount();
 
-        // Ops overrides the AI and gives ORD-001 to Ananya (BUSY, allowed as an override)
+        // Ops overrides the AI and gives ORD-001 to Kiran (AVAILABLE)
         mvc.perform(post("/orders/ORD-001/reassign").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"newAgentId\":\"AGT-003\"}"))
+                .content("{\"newAgentId\":\"AGT-004\"}"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("REASSIGNED"))
-            .andExpect(jsonPath("$.assignedAgentId").value("AGT-003"));
+            .andExpect(jsonPath("$.assignedAgentId").value("AGT-004"));
 
         assertThat(suggestions.findByOrderId("ORD-001")).extracting(ReassignmentSuggestion::getStatus)
             .containsOnly(SuggestionStatus.EXPIRED);
         assertThat(agents.findById("AGT-001").orElseThrow().getActiveOrderCount()).isEqualTo(priyaBefore - 1);
 
-        // Offline target and the order's own agent are refused with a reason
-        mvc.perform(post("/orders/ORD-002/reassign").contentType(MediaType.APPLICATION_JSON)
-                .content("{\"newAgentId\":\"AGT-001\"}"))
-            .andExpect(status().isConflict())
-            .andExpect(jsonPath("$.message").exists());
+        // Only AVAILABLE agents can take it: BUSY (Ananya), OFFLINE and the order's own agent are refused
+        for (String target : List.of("AGT-003", "AGT-001")) {
+            mvc.perform(post("/orders/ORD-002/reassign").contentType(MediaType.APPLICATION_JSON)
+                    .content("{\"newAgentId\":\"" + target + "\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").exists());
+        }
     }
 
     @Test
