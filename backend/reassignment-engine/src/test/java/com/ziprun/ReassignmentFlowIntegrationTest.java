@@ -10,7 +10,10 @@ import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.domain.TriggerReason;
 import com.ziprun.repository.AgentRepository;
 import com.ziprun.repository.OrderRepository;
+import com.ziprun.exception.StaleRecommendationException;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
+import com.ziprun.routing.RoutingResult;
+import com.ziprun.service.suggestion.SuggestionService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -23,6 +26,7 @@ import java.util.List;
 import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -48,6 +52,7 @@ class ReassignmentFlowIntegrationTest {
     @Autowired OrderRepository orders;
     @Autowired AgentRepository agents;
     @Autowired ReassignmentSuggestionRepository suggestions;
+    @Autowired SuggestionService suggestionService;
 
     @Test
     void agentOfflineQueuesOneSpreadOutSuggestionPerStrandedOrder() throws Exception {
@@ -148,6 +153,54 @@ class ReassignmentFlowIntegrationTest {
             .andExpect(jsonPath("$.details").isArray());
         mvc.perform(patch("/agents/AGT-002/status").contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"ASLEEP\"}"))
             .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void suggestionsPointingAtAnAgentWhoGoesOfflineAreWithdrawnAndReplanned() throws Exception {
+        // Priya's orders get suggestions spread across Rahul (AGT-002) and Kiran (AGT-004)
+        setAgentStatus("AGT-001", "OFFLINE");
+        List<ReassignmentSuggestion> first = awaitPendingReplans(3);
+        List<String> toRahul = first.stream()
+            .filter(s -> s.getRecommendedAgentId().equals("AGT-002")).map(ReassignmentSuggestion::getId).toList();
+        assertThat(toRahul).isNotEmpty();
+
+        // Now Rahul goes offline too: his recommendations are stale
+        setAgentStatus("AGT-002", "OFFLINE");
+        List<ReassignmentSuggestion> after = await(this::pendingReplans,
+            list -> list.size() == 3 && list.stream().noneMatch(s -> s.getRecommendedAgentId().equals("AGT-002")));
+
+        assertThat(toRahul).allSatisfy(id ->
+            assertThat(suggestions.findById(id).orElseThrow().getStatus()).isEqualTo(SuggestionStatus.EXPIRED));
+        assertThat(after).extracting(ReassignmentSuggestion::getRecommendedAgentId).containsOnly("AGT-004");
+    }
+
+    @Test
+    void suggestionForAnAgentWhoWentOfflineMidRoutingIsRefused() throws Exception {
+        // Routing picked Kiran, but Kiran went offline before the suggestion was saved
+        RoutingResult picked = new RoutingResult("AGT-004", 0.9, "Kiran is free", "ai:gemini");
+        setAgentStatus("AGT-004", "OFFLINE");
+
+        assertThatThrownBy(() -> suggestionService.createSuggestion("ORD-003", picked, TriggerReason.INITIAL))
+            .isInstanceOf(StaleRecommendationException.class);
+        assertThat(suggestions.findByOrderId("ORD-003")).isEmpty();
+    }
+
+    @Test
+    void orderCanBeKeptWithItsAgentOnceTheyAreBack() throws Exception {
+        setAgentStatus("AGT-001", "OFFLINE");
+        awaitPendingReplans(3);
+
+        // still offline: refused
+        mvc.perform(post("/orders/ORD-001/keep")).andExpect(status().isConflict());
+
+        setAgentStatus("AGT-001", "AVAILABLE");
+        mvc.perform(post("/orders/ORD-001/keep"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("ASSIGNED"))
+            .andExpect(jsonPath("$.assignedAgentId").value("AGT-001"));
+
+        assertThat(suggestions.findByOrderId("ORD-001")).extracting(ReassignmentSuggestion::getStatus)
+            .containsOnly(SuggestionStatus.EXPIRED);
     }
 
     @Test

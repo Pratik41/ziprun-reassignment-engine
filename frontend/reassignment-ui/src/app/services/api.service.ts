@@ -138,6 +138,10 @@ export class ApiService {
     }
   }
 
+  keepWithCurrentAgent(orderId: string): Observable<any> {
+    return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/keep`, {});
+  }
+
   manualReassign(orderId: string, newAgentId: string): Observable<any> {
     return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/reassign`, {
       newAgentId

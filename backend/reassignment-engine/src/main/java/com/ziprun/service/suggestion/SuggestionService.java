@@ -1,5 +1,6 @@
 package com.ziprun.service.suggestion;
 
+import com.ziprun.domain.Order;
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.domain.TriggerReason;
@@ -57,4 +58,22 @@ public interface SuggestionService {
      * True if a PENDING suggestion with triggerReason=AGENT_OFFLINE exists for the order.
      */
     boolean hasPendingOfflineSuggestion(String orderId);
+
+    /**
+     * Withdraws (EXPIRED) every PENDING suggestion that recommends this agent.
+     * Called by the agentic loop when the agent goes OFFLINE.
+     *
+     * @return ids of the orders whose suggestion was withdrawn
+     */
+    List<String> expirePendingRecommending(String agentId);
+
+    /**
+     * Ops decision: the order's original agent is back, keep it with them.
+     * Order REASSIGNMENT_PENDING -> ASSIGNED and its PENDING suggestions EXPIRED,
+     * in one transaction.
+     *
+     * @throws com.ziprun.exception.InvalidStateException if the agent is still OFFLINE
+     *         or the order isn't REASSIGNMENT_PENDING
+     */
+    Order keepWithCurrentAgent(String orderId);
 }

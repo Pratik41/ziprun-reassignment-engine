@@ -1,7 +1,9 @@
 package com.ziprun.service.event;
 
 import com.ziprun.domain.Order;
+import com.ziprun.domain.OrderStatus;
 import com.ziprun.domain.event.AgentOfflineEvent;
+import com.ziprun.exception.StaleRecommendationException;
 import com.ziprun.routing.RoutingContext;
 import com.ziprun.routing.RoutingResult;
 import com.ziprun.routing.RoutingService;
@@ -13,6 +15,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -21,6 +24,7 @@ import java.util.Optional;
  *
  *   OBSERVE    AgentOfflineEvent, delivered after the status change commits
  *   REASON     which orders does this agent still own? (ASSIGNED / REASSIGNED / already PENDING)
+ *              and which open suggestions recommend this agent? (now stale: EXPIRED, order re-planned)
  *   ACT        flag them REASSIGNMENT_PENDING, route each with recovery context,
  *              queue an AGENT_OFFLINE suggestion
  *   CHECKPOINT nothing is reassigned here; ops accepts/rejects via PATCH /suggestions/{id}
@@ -59,15 +63,35 @@ public class ReplanEventHandler {
         String agentName = event.getAgentName();
 
         try {
-            // REASON: which orders are stranded?
-            List<Order> stranded = orderService.findActiveOrdersForAgent(agentId);
-            log.info("AGENTIC LOOP: agent {} ({}) went OFFLINE; {} stranded order(s)", agentId, agentName, stranded.size());
+            // REASON (1/2): which orders does this agent own?
+            List<Order> owned = orderService.findActiveOrdersForAgent(agentId);
+
+            // REASON (2/2): which open suggestions point AT this agent? They are now stale:
+            // withdraw them, and re-plan any order that was waiting on one.
+            List<String> withdrawnFor = List.of();
+            try {
+                withdrawnFor = suggestionService.expirePendingRecommending(agentId);
+            } catch (Exception e) {
+                // Don't let cleanup of stale suggestions block re-planning the agent's own orders
+                log.error("Could not withdraw suggestions pointing at {}; continuing with owned orders", agentId, e);
+            }
+            List<Order> stranded = new ArrayList<>(owned);
+            for (String orderId : withdrawnFor) {
+                Order order = orderService.getById(orderId);
+                boolean alreadyIncluded = stranded.stream().anyMatch(o -> o.getId().equals(orderId));
+                if (!alreadyIncluded && order.getStatus() == OrderStatus.REASSIGNMENT_PENDING) {
+                    stranded.add(order);
+                }
+            }
+
+            log.info("AGENTIC LOOP: agent {} ({}) went OFFLINE; {} owned order(s), {} suggestion(s) pointing at them "
+                + "withdrawn; {} order(s) to re-plan", agentId, agentName, owned.size(), withdrawnFor.size(), stranded.size());
             if (stranded.isEmpty()) {
                 return;
             }
 
-            // ACT (1/2): flag them all first so the UI shows them as pending immediately
-            for (Order order : stranded) {
+            // ACT (1/2): flag the owned orders first so the UI shows them as pending immediately
+            for (Order order : owned) {
                 orderService.markReassignmentPending(order.getId());
             }
 
@@ -102,19 +126,30 @@ public class ReplanEventHandler {
 
     private enum Outcome { CREATED, SKIPPED, NO_CANDIDATE }
 
+    /** The roster can change mid-routing (slow LLM); one re-route covers that. */
+    private static final int MAX_ROUTING_ATTEMPTS = 2;
+
     private Outcome replanOrder(Order order, RoutingContext context) {
         if (suggestionService.hasPendingOfflineSuggestion(order.getId())) {
             return Outcome.SKIPPED;
         }
 
-        // Outside any transaction: may call the LLM (bounded by llm.timeout-ms per provider)
-        Optional<RoutingResult> result = routingService.route(order, context);
-        if (result.isEmpty()) {
-            return Outcome.NO_CANDIDATE;
+        for (int attempt = 1; ; attempt++) {
+            // Outside any transaction: may call the LLM (bounded by llm.timeout-ms per provider)
+            Optional<RoutingResult> result = routingService.route(order, context);
+            if (result.isEmpty()) {
+                return Outcome.NO_CANDIDATE;
+            }
+            try {
+                return suggestionService.createReplanSuggestionIfAbsent(order.getId(), result.get()).isPresent()
+                    ? Outcome.CREATED
+                    : Outcome.SKIPPED;
+            } catch (StaleRecommendationException e) {
+                if (attempt >= MAX_ROUTING_ATTEMPTS) {
+                    throw e;
+                }
+                log.info("Order {}: {}. Re-routing.", order.getId(), e.getMessage());
+            }
         }
-
-        return suggestionService.createReplanSuggestionIfAbsent(order.getId(), result.get()).isPresent()
-            ? Outcome.CREATED
-            : Outcome.SKIPPED;
     }
 }

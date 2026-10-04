@@ -1,10 +1,15 @@
 package com.ziprun.service.suggestion;
 
+import com.ziprun.domain.AgentStatus;
+import com.ziprun.domain.Order;
+import com.ziprun.domain.OrderStatus;
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.domain.TriggerReason;
 import com.ziprun.exception.InvalidStateException;
 import com.ziprun.exception.NotFoundException;
+import com.ziprun.exception.StaleRecommendationException;
+import com.ziprun.repository.AgentRepository;
 import com.ziprun.repository.OrderRepository;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
 import com.ziprun.routing.RoutingResult;
@@ -36,20 +41,31 @@ public class SuggestionServiceImpl implements SuggestionService {
 
     private final ReassignmentSuggestionRepository suggestionRepository;
     private final OrderRepository orderRepository;
+    private final AgentRepository agentRepository;
     private final OrderService orderService;
 
     public SuggestionServiceImpl(
             ReassignmentSuggestionRepository suggestionRepository,
             OrderRepository orderRepository,
+            AgentRepository agentRepository,
             OrderService orderService
     ) {
         this.suggestionRepository = suggestionRepository;
         this.orderRepository = orderRepository;
+        this.agentRepository = agentRepository;
         this.orderService = orderService;
     }
 
     @Override
     public ReassignmentSuggestion createSuggestion(String orderId, RoutingResult result, TriggerReason triggerReason) {
+        // Routing read the roster before (possibly slow) LLM calls; re-check right before saving
+        boolean stillOnline = agentRepository.findById(result.getRecommendedAgentId())
+            .map(agent -> agent.getStatus() != AgentStatus.OFFLINE)
+            .orElse(false);
+        if (!stillOnline) {
+            throw new StaleRecommendationException(result.getRecommendedAgentId());
+        }
+
         ReassignmentSuggestion suggestion = new ReassignmentSuggestion();
         suggestion.setId("SUGG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
         suggestion.setOrderId(orderId);
@@ -148,6 +164,37 @@ public class SuggestionServiceImpl implements SuggestionService {
     public boolean hasPendingOfflineSuggestion(String orderId) {
         return suggestionRepository.existsByOrderIdAndStatusAndTriggerReason(
             orderId, SuggestionStatus.PENDING, TriggerReason.AGENT_OFFLINE);
+    }
+
+    @Override
+    public List<String> expirePendingRecommending(String agentId) {
+        LocalDateTime now = LocalDateTime.now();
+        List<ReassignmentSuggestion> stale = suggestionRepository.findByRecommendedAgentIdAndStatus(agentId, SuggestionStatus.PENDING);
+        stale.forEach(s -> {
+            s.setStatus(SuggestionStatus.EXPIRED);
+            s.setDecidedAt(now);
+            log.info("Suggestion {} EXPIRED: recommended agent {} went OFFLINE (order {})", s.getId(), agentId, s.getOrderId());
+        });
+        return stale.stream().map(ReassignmentSuggestion::getOrderId).distinct().toList();
+    }
+
+    @Override
+    public Order keepWithCurrentAgent(String orderId) {
+        Order order = orderService.getById(orderId);
+        if (order.getStatus() != OrderStatus.REASSIGNMENT_PENDING) {
+            throw new InvalidStateException("Order " + orderId + " is " + order.getStatus() + ", not REASSIGNMENT_PENDING");
+        }
+        // updateStatus refuses if the agent is still OFFLINE
+        Order kept = orderService.updateStatus(orderId, OrderStatus.ASSIGNED);
+
+        LocalDateTime now = LocalDateTime.now();
+        suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING).forEach(s -> {
+            s.setStatus(SuggestionStatus.EXPIRED);
+            s.setDecidedAt(now);
+        });
+        log.info("Order {} kept with original agent {} (back online); pending suggestions expired",
+            orderId, kept.getAssignedAgentId());
+        return kept;
     }
 
     private static String truncate(String reasoning) {

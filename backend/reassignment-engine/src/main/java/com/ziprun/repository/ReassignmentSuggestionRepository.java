@@ -17,6 +17,8 @@ public interface ReassignmentSuggestionRepository extends JpaRepository<Reassign
 
     List<ReassignmentSuggestion> findByOrderIdAndStatus(String orderId, SuggestionStatus status);
 
+    List<ReassignmentSuggestion> findByRecommendedAgentIdAndStatus(String agentId, SuggestionStatus status);
+
     /**
      * Critical for agentic loop idempotency (ADR-8).
      * Before creating a new AGENT_OFFLINE suggestion, check whether one is already

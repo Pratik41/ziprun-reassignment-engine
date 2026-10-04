@@ -55,6 +55,14 @@ interface LiveReasoning {
         <div class="orders-list">
           @for (order of orders; track order.id) {
             <div class="order-group">
+              @if (isAssignedAgentBack(order)) {
+                <div class="agent-back">
+                  <span>✅ {{ agentName(order.assignedAgentId) }} is back online. {{ order.id }} can stay with them.</span>
+                  <button (click)="keepWithCurrentAgent(order.id)" class="btn-keep" [disabled]="keepingOrderId === order.id">
+                    ↩ Keep with {{ agentFirstName(order.assignedAgentId) }}
+                  </button>
+                </div>
+              }
               @if (order.suggestions && order.suggestions.length > 0) {
                 @for (suggestion of order.suggestions; track suggestion.id) {
                   <app-suggestion-card
@@ -123,6 +131,37 @@ interface LiveReasoning {
     </div>
   `,
   styles: [`
+    .agent-back {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 10px 14px;
+      margin-bottom: 8px;
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      color: #065f46;
+    }
+
+    .btn-keep {
+      padding: 6px 12px;
+      background: #10b981;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .btn-keep:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     .live-reasoning {
       margin-top: 12px;
       padding: 12px;
@@ -475,6 +514,7 @@ export class OrdersListComponent implements OnInit, OnDestroy {
   error: string | null = null;
   actionError: string | null = null;
   busySuggestionId: string | null = null;
+  keepingOrderId: string | null = null;
   streams: { [orderId: string]: LiveReasoning } = {};
   private streamCancels: { [orderId: string]: () => void } = {};
   reassigningOrderId: string | null = null;
@@ -534,6 +574,32 @@ export class OrdersListComponent implements OnInit, OnDestroy {
 
   refreshOrders() {
     this.loadOrders();
+  }
+
+  /** The order's own agent went offline earlier but is online again. */
+  isAssignedAgentBack(order: any): boolean {
+    const agent = this.agents.find(a => a.id === order.assignedAgentId);
+    return !!agent && agent.status !== 'OFFLINE';
+  }
+
+  agentFirstName(agentId: string): string {
+    const agent = this.agents.find(a => a.id === agentId);
+    return agent ? agent.name.split(' ')[0] : agentId;
+  }
+
+  keepWithCurrentAgent(orderId: string) {
+    this.actionError = null;
+    this.keepingOrderId = orderId;
+    this.apiService.keepWithCurrentAgent(orderId).subscribe({
+      next: () => {
+        this.keepingOrderId = null;
+        this.refreshService.triggerRefresh();
+      },
+      error: (err) => {
+        this.keepingOrderId = null;
+        this.actionError = this.messageFrom(err, 'Failed to keep order');
+      }
+    });
   }
 
   agentName(agentId: string): string {

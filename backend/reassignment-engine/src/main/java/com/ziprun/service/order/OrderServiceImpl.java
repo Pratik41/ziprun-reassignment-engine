@@ -99,6 +99,10 @@ public class OrderServiceImpl implements OrderService {
             throw new InvalidStateException(
                 "Use POST /orders/{id}/reassign or accept a suggestion to move an order to REASSIGNED");
         }
+        if (newStatus == OrderStatus.ASSIGNED && getAgent(order.getAssignedAgentId()).getStatus() == AgentStatus.OFFLINE) {
+            throw new InvalidStateException(String.format(
+                "Order %s can't go back to %s: that agent is still OFFLINE", orderId, order.getAssignedAgentId()));
+        }
         order.transitionTo(newStatus);
 
         if (newStatus == OrderStatus.DELIVERED) {

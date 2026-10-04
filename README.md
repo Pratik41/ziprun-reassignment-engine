@@ -62,9 +62,10 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 | `POST` | `/orders/{id}/suggest` | runs the active strategy, persists an `INITIAL` suggestion → 201 |
 | `POST` | `/orders/{id}/suggest/stream` | same, as Server-Sent Events: `start`, `token` (reasoning text as generated), `restart` (fallback), then `suggestion` or `error` |
 | `POST` | `/orders/{id}/reassign` | manual override `{newAgentId}` |
+| `POST` | `/orders/{id}/keep` | original agent is back online: order returns to `ASSIGNED`, open suggestions `EXPIRED` |
 | `GET` | `/agents?status=` | |
 | `PATCH` | `/agents/{id}/status` | `OFFLINE` fires the agentic loop asynchronously; returns immediately |
-| `GET` | `/suggestions?status=` | `PENDING`, `ACCEPTED`, `REJECTED` |
+| `GET` | `/suggestions?status=` | `PENDING`, `ACCEPTED`, `REJECTED`, `EXPIRED` (withdrawn by the system) |
 | `PATCH` | `/suggestions/{id}` | `{status: ACCEPTED | REJECTED}`. Accept reassigns the order atomically |
 | `GET` / `PUT` | `/routing/strategy` | view / switch active strategy at runtime `{strategy}` |
 
@@ -118,6 +119,6 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-34 tests:
+37 tests:
 - Unit: rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction.
-- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).
+- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes offline; offline-mid-routing recommendation refused; keep-with-original-agent; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).

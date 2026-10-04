@@ -5,6 +5,7 @@ import com.ziprun.domain.OrderStatus;
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.TriggerReason;
 import com.ziprun.exception.InvalidStateException;
+import com.ziprun.exception.StaleRecommendationException;
 import com.ziprun.routing.ReasoningListener;
 import com.ziprun.routing.RoutingContext;
 import com.ziprun.routing.RoutingResult;
@@ -41,6 +42,7 @@ import java.util.Map;
  * POST   /orders/{id}/suggest - Run active routing strategy, persist + return suggestion (201)
  * POST   /orders/{id}/suggest/stream - Same, streaming the AI's reasoning as SSE
  * POST   /orders/{id}/reassign- Manual override by ops
+ * POST   /orders/{id}/keep    - Keep with original agent once they're back online
  */
 @RestController
 @RequestMapping("/orders")
@@ -168,10 +170,20 @@ public class OrderController {
     }
 
     private ReassignmentSuggestion routeAndPersist(Order order, RoutingContext context) {
-        RoutingResult result = routingService.route(order, context)
-            .orElseThrow(() -> new InvalidStateException("No AVAILABLE agents to recommend for order " + order.getId()));
-        log.debug("Suggestion for order {}: {}", order.getId(), result);
-        return suggestionService.createSuggestion(order.getId(), result, TriggerReason.INITIAL);
+        for (int attempt = 1; ; attempt++) {
+            RoutingResult result = routingService.route(order, context)
+                .orElseThrow(() -> new InvalidStateException("No AVAILABLE agents to recommend for order " + order.getId()));
+            log.debug("Suggestion for order {}: {}", order.getId(), result);
+            try {
+                return suggestionService.createSuggestion(order.getId(), result, TriggerReason.INITIAL);
+            } catch (StaleRecommendationException e) {
+                if (attempt >= 2) {
+                    throw e;
+                }
+                // The roster changed while the LLM was thinking; route once more
+                context.listener().restart(e.getMessage() + ", re-routing");
+            }
+        }
     }
 
     /**
@@ -208,6 +220,15 @@ public class OrderController {
     @PostMapping("/{id}/reassign")
     public Order manualReassign(@PathVariable String id, @Valid @RequestBody ManualReassignRequest request) {
         return orderService.reassignToAgent(id, request.newAgentId());
+    }
+
+    /**
+     * POST /orders/{id}/keep - The order's original agent is back online: keep the
+     * order with them (REASSIGNMENT_PENDING -> ASSIGNED) and expire its open suggestions.
+     */
+    @PostMapping("/{id}/keep")
+    public Order keepWithCurrentAgent(@PathVariable String id) {
+        return suggestionService.keepWithCurrentAgent(id);
     }
 
     // ============ DTOs ============

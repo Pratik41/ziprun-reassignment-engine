@@ -155,6 +155,7 @@ Partly in place: `RoutingContext.pendingLoad` makes each routing call aware of s
 3. **Full dispatch board / SLA countdown / zone map.** The "orders by agent" view covers agent load; a board with SLA colours needs SLA data that doesn't exist yet.
 4. **Auth on the API.** Out of scope for the sprint; noted because `PUT /routing/strategy` is an operational lever that would need it in production.
 5. **Durable event delivery** (broker / outbox), covered in ADR-4.
+6. **Schema migrations (Flyway).** The schema comes from `ddl-auto=update`, which only *adds* tables and columns. On H2, Hibernate maps `@Enumerated(STRING)` to native `ENUM` columns, so adding an enum value (as happened with `SuggestionStatus.EXPIRED`, and will happen with a Sprint 3 `TriggerReason.SLA_RISK`) needs a manual `ALTER` on any existing database; fresh databases are fine. Nullable sprint-2 columns are additive, so they're safe. Flyway with versioned migrations is the first Sprint 2 infrastructure task, before Postgres.
 
 ---
 
@@ -216,6 +217,8 @@ Option 3:
 - `SuggestionService.createReplanSuggestionIfAbsent` re-checks inside a transaction after `OrderRepository.findByIdForUpdate` (`PESSIMISTIC_WRITE`). A concurrent run blocks on the lock, then sees the first run's suggestion and skips.
 - Stranded orders include ones already REASSIGNMENT_PENDING, so an order whose earlier re-plan failed (no suggestion) is retried on the next trigger, while covered ones are skipped.
 - `AgentServiceImpl` only publishes the event on a real transition to OFFLINE, so a repeated OFFLINE→OFFLINE PATCH is a no-op.
+- **Stale suggestions.** A suggestion is a snapshot taken when it was created. If the agent it *recommends* later goes OFFLINE, the loop marks it `EXPIRED` (not `REJECTED`: no human said no) and re-plans the order if it is still waiting (`SuggestionService.expirePendingRecommending`). Without this, ops would see recommendations for agents who can no longer take the order. Accepting such a suggestion was already refused with 409, but it shouldn't be offered in the first place. Tested by `suggestionsPointingAtAnAgentWhoGoesOfflineAreWithdrawnAndReplanned`.
+- **Agent goes offline *during* routing.** Routing reads the roster, then may wait seconds for the LLM; the recommended agent can go offline in between, after their own clean-up has already run. `SuggestionService.createSuggestion` re-checks the agent right before saving and throws `StaleRecommendationException`; both callers re-route once. (Found while testing against the live Gemini API, where a 503 retry stretched routing to ~7s.)
 - Tested: `ReassignmentFlowIntegrationTest.secondOfflineTriggerDoesNotDuplicateSuggestions`.
 
 **Tradeoffs accepted**  
@@ -238,6 +241,7 @@ The loop could reassign automatically. The brief asks for a checkpoint where ops
 Option 2. The loop only ever creates PENDING suggestions; nothing in `ReplanEventHandler` changes `assignedAgentId`. The checkpoint is `PATCH /suggestions/{id}` → `SuggestionService.updateStatus`:
 - **ACCEPTED:** in one transaction, `OrderService.reassignToAgent` releases the old agent's load, adds to the new agent's, sets status REASSIGNED, and rejects any other PENDING suggestions for that order. If the recommended agent went OFFLINE in the meantime, it returns 409 and nothing changes.
 - **REJECTED:** the order stays REASSIGNMENT_PENDING; the UI offers "Get Suggestion" or manual reassign.
+- **Original agent is back:** if the order's own agent comes back online before ops decides, the UI offers "Keep with <agent>" (`POST /orders/{id}/keep`): the order returns to ASSIGNED and its open suggestions are `EXPIRED`, in one transaction. The system does *not* do this automatically when the agent returns. Whether a recovered agent should take the orders back (they may still be unwell, or the order may already be late) is the kind of call the checkpoint exists for.
 
 **When I'd remove the checkpoint:** for re-plans where (a) the suggestion came from the AI rather than a fallback, (b) confidence ≥ 0.9, (c) the recommended agent's effective load stays below `maxCapacity`, and (d) the order's SLA would breach before a typical ops response time. That requires Sprint 2 capacity and Sprint 3 SLA data, and an audit trail of auto-decisions before it's trusted.
 
