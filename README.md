@@ -119,6 +119,6 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-40 tests:
+41 tests:
 - Unit: rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction.
-- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; offline-mid-routing recommendation refused; keep-with-original-agent; manual reassign retires open suggestions; last AVAILABLE agent protected; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).
+- End-to-end (MockMvc + async loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; stranded orders re-balanced when an agent becomes available; offline-mid-routing recommendation refused; keep-with-original-agent; manual reassign retires open suggestions; last AVAILABLE agent protected; structured errors; async fallback when the AI hallucinates; SSE stream (tokens then suggestion, and fallback with `restart`).

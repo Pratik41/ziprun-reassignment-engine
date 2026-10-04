@@ -68,6 +68,14 @@ public interface SuggestionService {
     List<String> expirePendingRecommending(String agentId);
 
     /**
+     * Withdraws (EXPIRED) the open suggestions of every REASSIGNMENT_PENDING order,
+     * so they can be re-planned against a changed roster.
+     *
+     * @return ids of all REASSIGNMENT_PENDING orders (with or without a withdrawn suggestion)
+     */
+    List<String> withdrawSuggestionsForStrandedOrders();
+
+    /**
      * Ops decision: the order's original agent is back, keep it with them.
      * Order REASSIGNMENT_PENDING -> ASSIGNED and its PENDING suggestions EXPIRED,
      * in one transaction.

@@ -88,8 +88,13 @@ public class SuggestionServiceImpl implements SuggestionService {
     public Optional<ReassignmentSuggestion> createReplanSuggestionIfAbsent(String orderId, RoutingResult result) {
         // Lock the order row: a concurrent re-plan of the same order blocks here until we commit,
         // then sees our suggestion in the check below.
-        orderRepository.findByIdForUpdate(orderId).orElseThrow(() -> new NotFoundException("Order", orderId));
+        Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(() -> new NotFoundException("Order", orderId));
 
+        // Ops may have resolved it (keep / reassign / accept) while routing was running
+        if (order.getStatus() != OrderStatus.REASSIGNMENT_PENDING) {
+            log.info("Order {} is {} now; dropping late re-plan suggestion", orderId, order.getStatus());
+            return Optional.empty();
+        }
         if (hasPendingOfflineSuggestion(orderId)) {
             log.info("Idempotency: order {} already has a PENDING AGENT_OFFLINE suggestion; skipping", orderId);
             return Optional.empty();
@@ -199,6 +204,15 @@ public class SuggestionServiceImpl implements SuggestionService {
         log.info("Order {} kept with original agent {} (back online); pending suggestions expired",
             orderId, kept.getAssignedAgentId());
         return kept;
+    }
+
+    @Override
+    public List<String> withdrawSuggestionsForStrandedOrders() {
+        List<String> stranded = orderRepository.findByStatus(OrderStatus.REASSIGNMENT_PENDING).stream()
+            .map(Order::getId)
+            .toList();
+        stranded.forEach(this::expirePendingFor);
+        return stranded;
     }
 
     @Override

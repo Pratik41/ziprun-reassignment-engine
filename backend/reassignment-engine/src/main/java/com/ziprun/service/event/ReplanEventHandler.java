@@ -3,6 +3,7 @@ package com.ziprun.service.event;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
+import com.ziprun.domain.event.AgentAvailableEvent;
 import com.ziprun.domain.event.AgentBusyEvent;
 import com.ziprun.domain.event.AgentOfflineEvent;
 import com.ziprun.exception.StaleRecommendationException;
@@ -27,8 +28,9 @@ import java.util.Optional;
 /**
  * Replan Event Handler: the agentic loop.
  *
- *   OBSERVE    an agent stops being AVAILABLE, delivered after the status change commits:
- *              AgentOfflineEvent (can't deliver anything) or AgentBusyEvent (no new orders)
+ *   OBSERVE    an agent's availability changes, delivered after the status change commits:
+ *              AgentOfflineEvent (can't deliver anything), AgentBusyEvent (no new orders),
+ *              AgentAvailableEvent (more capacity: re-balance all stranded orders)
  *   REASON     OFFLINE: which orders does this agent still own? (ASSIGNED / REASSIGNED / PENDING)
  *              both:    which open suggestions recommend this agent? (now stale: EXPIRED)
  *   ACT        flag owned orders REASSIGNMENT_PENDING, route every affected order with
@@ -116,39 +118,67 @@ public class ReplanEventHandler {
                 orderService.markReassignmentPending(order.getId());
             }
 
-            // ACT (2/2): route every affected order. The recovery context names the agent who
-            // stranded *that* order (its assigned agent), so the AI's incident report is accurate
-            // even for orders re-planned because their recommended agent changed.
-            Map<String, List<Order>> byStrandingAgent = new LinkedHashMap<>();
-            affected.forEach(o -> byStrandingAgent.computeIfAbsent(o.getAssignedAgentId(), k -> new ArrayList<>()).add(o));
-
-            int created = 0, skipped = 0, noCandidate = 0, failed = 0;
-            for (Map.Entry<String, List<Order>> group : byStrandingAgent.entrySet()) {
-                RoutingContext context = RoutingContext.agentOffline(group.getKey(), nameOf(group.getKey()), group.getValue());
-                for (Order order : group.getValue()) {
-                    try {
-                        switch (replanOrder(order, context)) {
-                            case CREATED -> created++;
-                            case SKIPPED -> skipped++;
-                            case NO_CANDIDATE -> noCandidate++;
-                        }
-                    } catch (Exception e) {
-                        failed++;
-                        log.error("Re-plan failed for order {} (trigger: {} {}); it stays REASSIGNMENT_PENDING "
-                            + "and will be retried on the next trigger", order.getId(), agentId, newStatus, e);
-                    }
-                }
-            }
-
-            log.info("AGENTIC LOOP done for {}: {} suggestion(s) queued, {} skipped (already pending), "
-                + "{} with no available agent, {} failed", agentId, created, skipped, noCandidate, failed);
-            if (noCandidate > 0) {
-                log.warn("{} order(s) have NO available agent to suggest; ops must add capacity "
-                    + "or reassign manually", noCandidate);
-            }
+            // ACT (2/2): route every affected order
+            replanOrders(affected, agentId + " " + newStatus);
         } catch (Exception e) {
             // Never let an async failure vanish silently
             log.error("AGENTIC LOOP aborted for agent {}: {}", agentId, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * An agent became AVAILABLE: capacity grew, so re-balance. Every stranded order's
+     * open suggestion is withdrawn and the order re-planned against the new roster;
+     * pending-load balancing then spreads them across everyone available, and orders
+     * that had no candidate before get one. Still only suggestions: ops decides.
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onAgentAvailable(AgentAvailableEvent event) {
+        try {
+            List<String> stranded = suggestionService.withdrawSuggestionsForStrandedOrders();
+            log.info("AGENTIC LOOP: agent {} ({}) is now AVAILABLE; re-balancing {} stranded order(s)",
+                event.getAgentId(), event.getAgentName(), stranded.size());
+            if (!stranded.isEmpty()) {
+                replanOrders(stranded.stream().map(orderService::getById).toList(), event.getAgentId() + " AVAILABLE");
+            }
+        } catch (Exception e) {
+            log.error("Re-balance aborted after {} became AVAILABLE: {}", event.getAgentId(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Routes each order and queues a suggestion. The recovery context names the agent who
+     * stranded *that* order (its assigned agent), so the AI's incident report is accurate
+     * whatever triggered the re-plan.
+     */
+    private void replanOrders(List<Order> affected, String trigger) {
+        Map<String, List<Order>> byStrandingAgent = new LinkedHashMap<>();
+        affected.forEach(o -> byStrandingAgent.computeIfAbsent(o.getAssignedAgentId(), k -> new ArrayList<>()).add(o));
+
+        int created = 0, skipped = 0, noCandidate = 0, failed = 0;
+        for (Map.Entry<String, List<Order>> group : byStrandingAgent.entrySet()) {
+            RoutingContext context = RoutingContext.agentOffline(group.getKey(), nameOf(group.getKey()), group.getValue());
+            for (Order order : group.getValue()) {
+                try {
+                    switch (replanOrder(order, context)) {
+                        case CREATED -> created++;
+                        case SKIPPED -> skipped++;
+                        case NO_CANDIDATE -> noCandidate++;
+                    }
+                } catch (Exception e) {
+                    failed++;
+                    log.error("Re-plan failed for order {} (trigger: {}); it stays REASSIGNMENT_PENDING "
+                        + "and will be retried on the next trigger", order.getId(), trigger, e);
+                }
+            }
+        }
+
+        log.info("AGENTIC LOOP done ({}): {} suggestion(s) queued, {} skipped (already pending), "
+            + "{} with no available agent, {} failed", trigger, created, skipped, noCandidate, failed);
+        if (noCandidate > 0) {
+            log.warn("{} order(s) have NO available agent to suggest; ops must add capacity "
+                + "or reassign manually", noCandidate);
         }
     }
 

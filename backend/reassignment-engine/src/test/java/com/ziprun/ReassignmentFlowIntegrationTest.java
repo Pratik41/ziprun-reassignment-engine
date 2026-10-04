@@ -81,9 +81,11 @@ class ReassignmentFlowIntegrationTest {
 
         setAgentStatus("AGT-001", "AVAILABLE");
         setAgentStatus("AGT-001", "OFFLINE");
-        Thread.sleep(1000); // give the second async run time to (not) do anything
+        Thread.sleep(1500); // let the re-balance and second offline run finish
 
-        assertThat(pendingReplans()).hasSize(3);
+        // exactly one open suggestion per stranded order, never duplicates
+        List<ReassignmentSuggestion> pending = await(this::pendingReplans, list -> list.size() == 3);
+        assertThat(pending).extracting(ReassignmentSuggestion::getOrderId).doesNotHaveDuplicates();
     }
 
     @Test
@@ -191,6 +193,25 @@ class ReassignmentFlowIntegrationTest {
             assertThat(suggestions.findById(id).orElseThrow().getStatus()).isEqualTo(SuggestionStatus.EXPIRED));
         // BUSY doesn't strand Rahul's own work the way OFFLINE does
         assertThat(orders.findByAssignedAgentIdAndStatus("AGT-002", OrderStatus.REASSIGNMENT_PENDING)).isEmpty();
+    }
+
+    @Test
+    void whenAnotherAgentBecomesAvailableStrandedOrdersAreRebalanced() throws Exception {
+        // Only Rahul available: all of Priya's stranded orders go to him
+        setAgentStatus("AGT-004", "BUSY");
+        setAgentStatus("AGT-001", "OFFLINE");
+        List<ReassignmentSuggestion> first = awaitPendingReplans(3);
+        assertThat(first).extracting(ReassignmentSuggestion::getRecommendedAgentId).containsOnly("AGT-002");
+
+        // Kiran becomes available again: the batch is re-planned across both
+        setAgentStatus("AGT-004", "AVAILABLE");
+        List<ReassignmentSuggestion> after = await(this::pendingReplans,
+            list -> list.size() == 3 && list.stream().anyMatch(s -> s.getRecommendedAgentId().equals("AGT-004")));
+
+        assertThat(after).extracting(ReassignmentSuggestion::getRecommendedAgentId).contains("AGT-002", "AGT-004");
+        assertThat(after).extracting(ReassignmentSuggestion::getOrderId).doesNotHaveDuplicates();
+        assertThat(first).allSatisfy(s ->
+            assertThat(suggestions.findById(s.getId()).orElseThrow().getStatus()).isEqualTo(SuggestionStatus.EXPIRED));
     }
 
     @Test
