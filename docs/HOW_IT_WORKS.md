@@ -27,9 +27,9 @@ Code paths are relative to `backend/reassignment-engine/src/main/java/com/ziprun
 ```mermaid
 flowchart LR
     subgraph UI["Angular UI (localhost:4200)"]
-        DP["Demo Controls<br/>status buttons, create order,<br/>strategy toggle"]
-        OL["Orders Pending Reassignment<br/>accept / reject / reassign / keep"]
-        RO["Agent roster +<br/>orders by agent"]
+        QP["Queue<br/>KPIs, waiting orders,<br/>accept / reject / reassign / keep"]
+        FP["Fleet panel + Fleet page<br/>agent status controls"]
+        OP["Orders page + New order<br/>routing toggle in the top bar"]
     end
 
     subgraph API["Spring Boot backend (localhost:8080)"]
@@ -53,7 +53,7 @@ flowchart LR
     S -- "status change" --> EV
     EV -- "after commit, async" --> H
     H --> R
-    C -- "Get Suggestion" --> R
+    C -- "Get suggestion" --> R
     R --> RB
     R --> AI
     AI --> GW
@@ -97,7 +97,7 @@ Each suggestion records:
 | `recommendedAgentId` | `AGT-004` | who should take the order |
 | `confidence` | `0.80` | how clear-cut the choice is |
 | `reasoning` | "Kiran Nair has 0 active orders…" | shown to ops word for word |
-| `triggerReason` | `AGENT_OFFLINE` / `INITIAL` | created by the loop (**⚡ Auto re-plan** tag) or by "Get Suggestion" (**Requested manually**) |
+| `triggerReason` | `AGENT_OFFLINE` / `INITIAL` | created by the loop (**⚡ Auto re-plan** tag) or by "Get suggestion" (**Requested**) |
 | `source` | `ai:gemini`, `rule-based`, `rule-based (AI fallback: TIMEOUT)` | what *actually* produced it |
 | `status` | `PENDING` → `ACCEPTED` / `REJECTED` / `EXPIRED` | see [section 9](#9-lifecycles) |
 
@@ -166,7 +166,7 @@ Things worth noticing:
 
 Both callers use the same entry point, `RoutingService.route(order, context)`:
 - the agentic loop, with a **recovery** context (who failed, the whole stranded batch)
-- the "Get Suggestion" button / `POST /orders/{id}/suggest`, with an **initial** context
+- the "Get suggestion" button / `POST /orders/{id}/suggest`, with an **initial** context
 
 ```mermaid
 flowchart TD
@@ -248,7 +248,7 @@ Result: Rahul 2, Kiran 1. The reasoning ops sees, for ORD-002:
 ```mermaid
 flowchart TD
     A(["AI strategy: recommend(order, candidates, context)"]) --> P{"Context?"}
-    P -- "initial<br/>(Get Suggestion)" --> P1["Initial prompt:<br/>routine request, balance the fleet"]
+    P -- "initial<br/>(Get suggestion)" --> P1["Initial prompt:<br/>routine request, balance the fleet"]
     P -- "recovery<br/>(agentic loop)" --> P2["Re-plan prompt:<br/>incident report"]
     P1 --> GW
     P2 --> GW
@@ -277,7 +277,7 @@ The AI gets a different brief depending on the situation (ADR-7). Both share the
 
 | | Initial prompt | Re-plan prompt |
 |---|---|---|
-| Used by | "Get Suggestion" / `POST /orders/{id}/suggest` | The agentic loop |
+| Used by | "Get suggestion" / `POST /orders/{id}/suggest` | The agentic loop |
 | Framing | "routine assignment request, nothing has failed" | "This is a RECOVERY situation" + incident report |
 | Extra facts | the order | who went offline, that their orders are void, **every stranded order in the batch** with the current one marked |
 | Priorities | lowest effective load; use the description (fragile, perishable…) | speed; **spread the batch**; **warn about a thin roster** and lower confidence |
@@ -346,10 +346,11 @@ The row lock means two background runs touching the same order can't both insert
 | Action | Where in the UI | What happens | Refused when |
 |---|---|---|---|
 | **Accept** | suggestion card | Order → `REASSIGNED` to the recommended agent; old agent −1 order, new agent +1; other open suggestions for that order → `REJECTED`. All in one transaction. | recommended agent is no longer `AVAILABLE` |
-| **Reject** | suggestion card | Suggestion → `REJECTED`; the order keeps waiting. Ask again with **Get Suggestion**, or reassign manually. | already decided |
-| **Get Suggestion** | waiting order with no open suggestion | Routes with the *initial* prompt, streams the reasoning live, saves a "Requested manually" suggestion. | no `AVAILABLE` candidate |
+| **Reject** | suggestion card | Suggestion → `REJECTED`; the order keeps waiting. Ask again with **Get suggestion**, or reassign manually. | already decided |
+| **Get suggestion** | waiting order with no open suggestion | Routes with the *initial* prompt, streams the reasoning live, saves a "Requested" suggestion. | no `AVAILABLE` candidate |
 | **Reassign manually** | any waiting order | Moves the order to the agent ops picked; its open suggestions → `EXPIRED`. | agent not `AVAILABLE`, or it's the same agent |
 | **Keep with <agent>** | waiting order whose own agent is `AVAILABLE` again | Order → back to `ASSIGNED` with them; open suggestions → `EXPIRED`. | that agent isn't `AVAILABLE` |
+| **Mark delivered** | Orders page, on Assigned/Reassigned orders | Order → `DELIVERED`; its agent gets one fewer active order. | order is still waiting for an agent |
 
 The dropdowns only list agents the server would accept, so a refusal usually means something changed in the last few seconds.
 
@@ -379,7 +380,7 @@ The allowed transitions live on the enum (`domain/OrderStatus.canTransitionTo`),
 
 ```mermaid
 stateDiagram-v2
-    [*] --> PENDING : created by the loop or Get Suggestion
+    [*] --> PENDING : created by the loop or Get suggestion
     PENDING --> ACCEPTED : ops accepts (order moves)
     PENDING --> REJECTED : ops rejects, or accepted a sibling
     PENDING --> EXPIRED : system withdrew it
@@ -408,7 +409,7 @@ An agent's **active order count** changes only through `Agent.assignOrder()` / `
 
 ## 10. Live reasoning (SSE streaming)
 
-"Get Suggestion" calls `POST /orders/{id}/suggest/stream`. The answer arrives as Server-Sent Events while the AI is still writing.
+"Get suggestion" calls `POST /orders/{id}/suggest/stream`. The answer arrives as Server-Sent Events while the AI is still writing.
 
 ```mermaid
 sequenceDiagram
@@ -453,8 +454,8 @@ The model replies in JSON. `ReasoningExtractor` decodes only the `reasoning` fie
 ## 12. Things you might not know
 
 - **The strategy toggle resets on restart.** It's kept in memory; on startup the backend uses `ROUTING_STRATEGY` (default `ai`). To always start in rule-based, set `ROUTING_STRATEGY=rule-based`.
-- **"Get Suggestion" uses the *initial* prompt even for a stranded order**, and its card says "Requested manually". Only the background loop uses the recovery prompt.
-- **Rejecting doesn't automatically ask again.** The order waits until ops clicks Get Suggestion, reassigns, or an agent status change triggers a re-plan.
+- **"Get suggestion" uses the *initial* prompt even for a stranded order**, and its card is tagged "Requested". Only the background loop uses the recovery prompt.
+- **Rejecting doesn't automatically ask again.** The order waits until ops clicks Get suggestion, reassigns, or an agent status change triggers a re-plan.
 - **Becoming Available replaces suggestions on screen.** A re-balance withdraws and recreates every waiting order's suggestion. If you click Accept on one being replaced, you'll get a message; the next refresh shows the new one.
 - **An offline agent's order count doesn't drop immediately.** It falls as their orders are accepted, reassigned or delivered, so the roster may show an Offline agent still "holding" orders.
 - **Pending load counts every open suggestion**, including manual ones on unrelated orders. An agent with many unanswered suggestions looks busier to routing.

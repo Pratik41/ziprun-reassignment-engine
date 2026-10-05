@@ -1,0 +1,153 @@
+<article class="item card fade-in">
+  <!-- Header: which order, and who it was with -->
+  <header class="item-head">
+    <div class="order-ident">
+      <div class="row">
+        <span class="mono order-id">{{ order.id }}</span>
+        <span class="badge tone-warning"><span class="dot"></span>Needs agent</span>
+      </div>
+      <div class="order-desc">{{ order.description }}</div>
+    </div>
+    <div class="was-with">
+      @if (originalAgent; as a) {
+        <span class="subtle">Was with</span>
+        <span class="was-name">{{ a.name }}</span>
+        <span class="badge" [class]="'badge tone-' + agentStatus[a.status].tone">{{ agentStatus[a.status].label }}</span>
+      }
+    </div>
+  </header>
+
+  <!-- Original agent is available again -->
+  @if (originalAgentBack) {
+    <div class="callout tone-success back">
+      <app-icon name="undo" />
+      <span class="grow"><strong>{{ originalAgent?.name }}</strong> is available again and can keep this order.</span>
+      <button class="btn btn-secondary btn-sm" [disabled]="busy() !== null" (click)="keep()">
+        Keep with {{ originalAgent?.name?.split(' ')?.[0] }}
+      </button>
+    </div>
+  }
+
+  <!-- Open suggestions -->
+  @for (s of suggestions; track s.id) {
+    <section class="suggestion">
+      <div class="sugg-top">
+        <div class="recommend">
+          <span class="label">Recommended</span>
+          <div class="row">
+            <app-icon name="arrow-right" [size]="15" class="arrow" />
+            <app-avatar [agentId]="s.recommendedAgentId" [agentName]="store.agentName(s.recommendedAgentId)"
+                        [status]="store.agentById().get(s.recommendedAgentId)?.status ?? null" />
+            <div>
+              <div class="agent-name">{{ store.agentName(s.recommendedAgentId) }}</div>
+              <div class="agent-meta subtle">
+                {{ store.agentById().get(s.recommendedAgentId)?.activeOrderCount ?? 0 }} active orders
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="confidence" [attr.title]="confidenceLabel[level(s.confidence)]">
+          <div class="conf-head">
+            <span class="label">Confidence</span>
+            <span class="conf-value" [class]="'conf-value ' + level(s.confidence)">{{ percent(s.confidence) }}</span>
+          </div>
+          <div class="meter" [class]="'meter ' + level(s.confidence)"><span [style.width.%]="s.confidence * 100"></span></div>
+        </div>
+
+        <div class="tags">
+          @if (s.triggerReason === 'AGENT_OFFLINE') {
+            <span class="badge tone-primary" title="Created automatically when agent availability changed. No one requested it.">
+              <app-icon name="zap" [size]="12" />Auto re-plan
+            </span>
+          } @else {
+            <span class="badge tone-neutral" title="Created because someone clicked 'Get suggestion'">
+              <app-icon name="user" [size]="12" />Requested
+            </span>
+          }
+          <span class="subtle small">{{ ago(s.createdAt) }}</span>
+        </div>
+      </div>
+
+      <blockquote class="reasoning" [class]="'reasoning ' + source(s.source).kind">
+        <div class="source" [attr.title]="source(s.source).detail">
+          <app-icon [name]="source(s.source).kind === 'ai' ? 'sparkles' : source(s.source).kind === 'fallback' ? 'alert' : 'scale'" [size]="13" />
+          {{ source(s.source).label }}
+        </div>
+        <p>{{ s.reasoning }}</p>
+      </blockquote>
+
+      <div class="actions">
+        @if (!recommendedAvailable(s)) {
+          <span class="warn small">
+            <app-icon name="alert" [size]="13" />
+            {{ store.agentName(s.recommendedAgentId) }} isn't available any more. A fresh suggestion will replace this.
+          </span>
+        }
+        <span class="spacer"></span>
+        <button class="btn btn-danger-ghost btn-sm" [disabled]="busy() !== null" (click)="reject(s)">
+          <app-icon name="x" [size]="14" />Reject
+        </button>
+        <button class="btn btn-success btn-sm" [disabled]="busy() !== null || !recommendedAvailable(s)" (click)="accept(s)">
+          @if (busy() === s.id) { <app-icon name="loader" [size]="14" class="spin" /> } @else { <app-icon name="check" [size]="14" /> }
+          Accept
+        </button>
+      </div>
+    </section>
+  } @empty {
+    <!-- No open suggestion: stream one, or say why there isn't one -->
+    <section class="no-suggestion">
+      @if (live(); as l) {
+        <div class="live">
+          <div class="live-head">
+            <app-icon name="sparkles" [size]="14" />
+            {{ l.strategy === 'ai' ? 'AI is reasoning' : 'Routing' }}…
+          </div>
+          @if (l.notice) {
+            <div class="warn small"><app-icon name="alert" [size]="13" />{{ l.notice }}</div>
+          }
+          <p class="live-text">{{ l.text }}<span class="caret"></span></p>
+        </div>
+      } @else {
+        <div class="row row-wrap">
+          <span class="muted grow-text">
+            @if (store.availableAgents().length === 0 || reassignTargets.length === 0) {
+              No other agent is available to suggest. Make someone Available in the fleet panel.
+            } @else {
+              No open suggestion. Ask for one, or pick an agent yourself.
+            }
+          </span>
+          <button class="btn btn-primary btn-sm" [disabled]="reassignTargets.length === 0" (click)="requestSuggestion()">
+            <app-icon name="sparkles" [size]="14" />Get suggestion
+          </button>
+        </div>
+      }
+    </section>
+  }
+
+  <!-- Manual reassign -->
+  <footer class="item-foot">
+    @if (reassignOpen()) {
+      <div class="reassign fade-in">
+        @if (reassignTargets.length > 0) {
+          <select class="select" [(ngModel)]="reassignTarget" aria-label="Agent to reassign to">
+            @for (a of reassignTargets; track a.id) {
+              <option [value]="a.id">{{ a.name }} · {{ a.activeOrderCount }} active</option>
+            }
+          </select>
+          <button class="btn btn-primary btn-sm" [disabled]="!reassignTarget || busy() !== null" (click)="submitReassign()">
+            Assign
+          </button>
+        } @else {
+          <span class="muted small">No other Available agent to assign to.</span>
+        }
+        <button class="btn btn-ghost btn-sm" (click)="reassignOpen.set(false)">Cancel</button>
+      </div>
+    } @else {
+      <button class="btn btn-ghost btn-sm" (click)="toggleReassign()">
+        <app-icon name="shuffle" [size]="14" />Reassign manually
+      </button>
+      <span class="subtle small">{{ order.id }} · created {{ ago(order.createdAt) }}</span>
+    }
+  </footer>
+</article>

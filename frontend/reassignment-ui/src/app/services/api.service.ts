@@ -1,71 +1,75 @@
-import { Injectable } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
+import { Injectable, inject } from '@angular/core';
+import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable } from 'rxjs';
+import { Agent, AgentStatus, Order, OrderStatus, StrategyInfo, Suggestion } from '../models';
 
 export interface SuggestionStreamHandlers {
   start?: (strategy: string) => void;
   token: (text: string) => void;
   restart: (reason: string) => void;
-  suggestion: (suggestion: any) => void;
+  suggestion: (suggestion: Suggestion) => void;
   error: (message: string) => void;
 }
 
-@Injectable({
-  providedIn: 'root'
-})
+/** The server's message from an error response ({status, error, message, ...}), or a fallback. */
+export function errorMessage(err: unknown, fallback = 'Something went wrong'): string {
+  if (err instanceof HttpErrorResponse) {
+    if (err.status === 0) {
+      return 'Cannot reach the backend at localhost:8080';
+    }
+    const body = err.error as { message?: string } | null;
+    return body?.message ?? fallback;
+  }
+  return fallback;
+}
+
+@Injectable({ providedIn: 'root' })
 export class ApiService {
-  private apiUrl = 'http://localhost:8080';
+  private readonly http = inject(HttpClient);
+  private readonly apiUrl = 'http://localhost:8080';
 
-  constructor(private http: HttpClient) {}
-
-  getOrders(): Observable<any[]> {
-    return this.http.get<any[]>(`${this.apiUrl}/orders`);
+  getAgents(): Observable<Agent[]> {
+    return this.http.get<Agent[]>(`${this.apiUrl}/agents`);
   }
 
-  getOrdersByStatus(status: string): Observable<any[]> {
-    return this.http.get<any[]>(`${this.apiUrl}/orders?status=${status}`);
+  getOrders(): Observable<Order[]> {
+    return this.http.get<Order[]>(`${this.apiUrl}/orders`);
   }
 
-  createOrder(order: any): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl}/orders`, order);
+  getSuggestions(): Observable<Suggestion[]> {
+    return this.http.get<Suggestion[]>(`${this.apiUrl}/suggestions`);
   }
 
-  getSuggestion(orderId: string): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/suggest`, {});
+  createOrder(description: string, assignedAgentId: string): Observable<Order> {
+    return this.http.post<Order>(`${this.apiUrl}/orders`, { description, assignedAgentId });
   }
 
-  acceptSuggestion(suggestionId: string): Observable<any> {
-    return this.http.patch<any>(`${this.apiUrl}/suggestions/${suggestionId}`, {
-      status: 'ACCEPTED'
-    });
+  updateOrderStatus(orderId: string, status: OrderStatus): Observable<Order> {
+    return this.http.patch<Order>(`${this.apiUrl}/orders/${orderId}/status`, { status });
   }
 
-  rejectSuggestion(suggestionId: string): Observable<any> {
-    return this.http.patch<any>(`${this.apiUrl}/suggestions/${suggestionId}`, {
-      status: 'REJECTED'
-    });
+  updateAgentStatus(agentId: string, status: AgentStatus): Observable<Agent> {
+    return this.http.patch<Agent>(`${this.apiUrl}/agents/${agentId}/status`, { status });
   }
 
-  getSuggestions(): Observable<any[]> {
-    return this.http.get<any[]>(`${this.apiUrl}/suggestions`);
+  decideSuggestion(suggestionId: string, status: 'ACCEPTED' | 'REJECTED'): Observable<Suggestion> {
+    return this.http.patch<Suggestion>(`${this.apiUrl}/suggestions/${suggestionId}`, { status });
   }
 
-  getAgents(): Observable<any[]> {
-    return this.http.get<any[]>(`${this.apiUrl}/agents`);
+  manualReassign(orderId: string, newAgentId: string): Observable<Order> {
+    return this.http.post<Order>(`${this.apiUrl}/orders/${orderId}/reassign`, { newAgentId });
   }
 
-  updateAgentStatus(agentId: string, status: string): Observable<any> {
-    return this.http.patch<any>(`${this.apiUrl}/agents/${agentId}/status`, {
-      status
-    });
+  keepWithCurrentAgent(orderId: string): Observable<Order> {
+    return this.http.post<Order>(`${this.apiUrl}/orders/${orderId}/keep`, {});
   }
 
-  getRoutingStrategy(): Observable<{ active: string; available: string[] }> {
-    return this.http.get<{ active: string; available: string[] }>(`${this.apiUrl}/routing/strategy`);
+  getRoutingStrategy(): Observable<StrategyInfo> {
+    return this.http.get<StrategyInfo>(`${this.apiUrl}/routing/strategy`);
   }
 
-  setRoutingStrategy(strategy: string): Observable<{ active: string; available: string[] }> {
-    return this.http.put<{ active: string; available: string[] }>(`${this.apiUrl}/routing/strategy`, { strategy });
+  setRoutingStrategy(strategy: string): Observable<StrategyInfo> {
+    return this.http.put<StrategyInfo>(`${this.apiUrl}/routing/strategy`, { strategy });
   }
 
   /**
@@ -80,7 +84,7 @@ export class ApiService {
         const response = await fetch(`${this.apiUrl}/orders/${orderId}/suggest/stream`, {
           method: 'POST',
           headers: { Accept: 'text/event-stream' },
-          signal: controller.signal
+          signal: controller.signal,
         });
         if (!response.ok || !response.body) {
           const body = await response.json().catch(() => null);
@@ -108,9 +112,9 @@ export class ApiService {
         if (!finished) {
           handlers.error('Stream ended without a suggestion');
         }
-      } catch (e: any) {
-        if (e?.name !== 'AbortError') {
-          handlers.error(e?.message ?? 'Stream failed');
+      } catch (e: unknown) {
+        if ((e as { name?: string })?.name !== 'AbortError') {
+          handlers.error((e as { message?: string })?.message ?? 'Stream failed');
         }
       }
     })();
@@ -132,19 +136,9 @@ export class ApiService {
       case 'start': handlers.start?.(payload.strategy); return false;
       case 'token': handlers.token(payload.text); return false;
       case 'restart': handlers.restart(payload.reason); return false;
-      case 'suggestion': handlers.suggestion(payload); return true;
+      case 'suggestion': handlers.suggestion(payload as Suggestion); return true;
       case 'error': handlers.error(payload.message); return true;
       default: return false;
     }
-  }
-
-  keepWithCurrentAgent(orderId: string): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/keep`, {});
-  }
-
-  manualReassign(orderId: string, newAgentId: string): Observable<any> {
-    return this.http.post<any>(`${this.apiUrl}/orders/${orderId}/reassign`, {
-      newAgentId
-    });
   }
 }

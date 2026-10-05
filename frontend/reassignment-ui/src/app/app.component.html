@@ -1,41 +1,74 @@
-<div class="app-container">
-  <!-- Header -->
-  <header class="app-header">
-    <div class="header-inner">
-      <div class="header-title">
-        <div class="logo">🚚</div>
-        <div>
-          <h1>ZipRun Reassignment Engine</h1>
-          <p class="header-subtitle">AI-powered order reassignment system</p>
+<div class="shell">
+  <aside class="sidebar">
+    <a routerLink="/queue" class="brand">
+      <span class="brand-mark"><app-icon name="truck" [size]="18" /></span>
+      <span>
+        <span class="brand-name">ZipRun</span>
+        <span class="brand-sub">Dispatch ops</span>
+      </span>
+    </a>
+
+    <nav class="nav">
+      <span class="nav-section">Operations</span>
+      <a routerLink="/queue" routerLinkActive="active" class="nav-item">
+        <app-icon name="list" />Queue
+        @if (store.waitingOrders().length > 0) {
+          <span class="nav-count">{{ store.waitingOrders().length }}</span>
+        }
+      </a>
+      <a routerLink="/fleet" routerLinkActive="active" class="nav-item">
+        <app-icon name="users" />Fleet
+        <span class="nav-meta">{{ store.agentCounts().AVAILABLE }}/{{ store.agents().length }}</span>
+      </a>
+      <a routerLink="/orders" routerLinkActive="active" class="nav-item">
+        <app-icon name="package" />Orders
+        <span class="nav-meta">{{ store.orders().length }}</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="conn" [class.down]="store.connection() === 'error'">
+        <span class="pulse"></span>
+        {{ store.connection() === 'ok' ? 'Live · updates every 3s' : 'Backend unreachable' }}
+      </div>
+      <button class="theme-btn" (click)="theme.toggle()">
+        <app-icon [name]="theme.isDark() ? 'sun' : 'moon'" />
+        {{ theme.isDark() ? 'Light mode' : 'Dark mode' }}
+      </button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <div class="strategy">
+        <span class="strategy-label">Routing</span>
+        <div class="seg" role="group" aria-label="Routing strategy">
+          @for (s of strategies(); track s) {
+            <button type="button" [class.on]="store.strategy()?.active === s" [disabled]="switching()"
+                    [attr.title]="info(s).hint" (click)="setStrategy(s)">
+              <app-icon [name]="info(s).icon" [size]="14" />{{ info(s).label }}
+            </button>
+          }
         </div>
       </div>
-      <div class="header-stats">
-        <div class="stat">
-          <span class="stat-label">Status</span>
-          <span class="stat-value">🟢 Live</span>
-        </div>
+      <span class="spacer"></span>
+      <button class="btn btn-primary" (click)="newOrderOpen.set(true)">
+        <app-icon name="plus" />New order
+      </button>
+    </header>
+
+    @if (store.connection() === 'error') {
+      <div class="offline-banner fade-in">
+        <app-icon name="wifi-off" />
+        <span>Can't reach the backend at <span class="mono">localhost:8080</span>. Showing the last data received; retrying every 3 seconds.</span>
       </div>
-    </div>
-  </header>
+    }
 
-  <!-- Main Dashboard -->
-  <main class="dashboard-main">
-    <!-- Demo Panel (Show workflow interactively) -->
-    <app-demo-panel></app-demo-panel>
-
-    <div class="dashboard-grid">
-      <!-- Left: Agent Roster -->
-      <aside class="dashboard-aside">
-        <app-agent-roster></app-agent-roster>
-      </aside>
-
-      <!-- Right: Orders & Suggestions -->
-      <section class="dashboard-content">
-        <app-orders-list></app-orders-list>
-        <app-orders-by-agent></app-orders-by-agent>
-      </section>
-    </div>
-  </main>
+    <main class="content">
+      <router-outlet />
+    </main>
+  </div>
 </div>
 
-<router-outlet />
+<app-create-order-dialog [open]="newOrderOpen()" (closed)="newOrderOpen.set(false)" />
+<app-toasts />

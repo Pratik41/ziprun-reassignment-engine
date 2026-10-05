@@ -6,6 +6,17 @@ Delivery fleets assign orders to agents at the start of a shift, and that works 
 
 This project automates that recovery. When an agent goes offline, the system finds the orders they were carrying, asks an AI (or a deterministic rule-based fallback) who should take each one, and queues those recommendations for an ops person to accept or reject. Nobody has to ask for the suggestions; they appear on their own.
 
+![ZipRun ops console: reassignment queue with KPIs, AI/rule-based suggestions and the fleet panel](docs/screenshots/queue.png)
+
+<details>
+<summary>More screens: dark mode, Fleet, Orders</summary>
+
+![Queue in dark mode](docs/screenshots/queue-dark.png)
+![Fleet page](docs/screenshots/fleet.png)
+![Orders page](docs/screenshots/orders.png)
+
+</details>
+
 - **Backend:** Spring Boot 3.3 · Java 17 · H2 · `backend/reassignment-engine`
 - **Frontend:** Angular 17 · `frontend/reassignment-ui`
 - **How it works (diagrams + detail):** [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)
@@ -18,7 +29,8 @@ This project automates that recovery. When an agent goes offline, the system fin
 - **AI you can trust:** every recommended agent is checked against the real roster, and any AI failure (timeout, quota, bad JSON, made-up agent) falls back to rule-based. Each suggestion is labelled with what actually produced it, e.g. `ai:gemini` or `rule-based (AI fallback: TIMEOUT)`.
 - **Load balancing:** routing counts active orders *plus* suggestions already queued, so a batch of stranded orders is spread across agents instead of piling onto one.
 - **Human in the loop:** the system only suggests. Ops accepts, rejects, reassigns manually, or keeps an order with its original agent once they're available again.
-- **Live reasoning:** "Get Suggestion" streams the AI's explanation as it is generated (Server-Sent Events).
+- **Live reasoning:** "Get suggestion" streams the AI's explanation as it is generated (Server-Sent Events).
+- **Ops console:** queue with KPIs, fleet and orders views, toast notifications, light and dark themes, works down to tablet width.
 - **Fleet guardrails:** the last Available agent can't go Busy or Offline, and only Available agents can be given orders.
 
 ## Getting started
@@ -45,13 +57,14 @@ On first start an empty database is filled from `data.sql`: 5 agents and 8 order
 
 ## Try it out
 
-1. Open http://localhost:4200.
-2. In **Demo Controls → Agent Status**, set **Priya Sharma** to **Offline**.
-3. Within a few seconds (the UI refreshes every 3s), ORD-001, ORD-002 and ORD-008 appear under **Orders Pending Reassignment**, each with an **⚡ Auto re-plan** tag, a recommended agent, confidence, reasoning and a source tag. They're spread across Rahul and Kiran.
+1. Open http://localhost:4200. You land on the **Queue**: KPIs at the top, waiting orders in the middle, and the **Fleet** panel on the right.
+2. In the Fleet panel, set **Priya Sharma** to **Off**.
+3. Within a few seconds (the UI refreshes every 3s), ORD-001, ORD-002 and ORD-008 appear in the queue, each with an **Auto re-plan** tag, a recommended agent, confidence, reasoning and its source (AI or rule-based). They're spread across Rahul and Kiran.
 4. **Accept** one. The order moves to the new agent and both agents' order counts update.
-5. **Reject** another, then click **Get Suggestion** on it to watch the reasoning stream in.
+5. **Reject** another, then click **Get suggestion** on it to watch the reasoning stream in.
 6. Set **Kiran** to **Busy**. His suggestions are withdrawn and re-planned to Rahul. Set him back to **Available** and the batch is re-balanced across both.
-7. Switch the **Routing Strategy** between `ai` and `rule-based`. It applies to the next suggestion, with no restart.
+7. Switch **Routing** between **AI** and **Rule-based** in the top bar. It applies to the next suggestion, with no restart.
+8. Use **New order** (top right), the **Fleet** page (every agent and their orders) and the **Orders** page (search, filter, mark delivered). The moon icon at the bottom of the sidebar switches to dark mode.
 
 The same flow with curl:
 
