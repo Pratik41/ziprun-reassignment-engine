@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -69,13 +68,6 @@ class StreamingSuggestionIntegrationTest {
 
     private String stream(String url) throws Exception {
         MvcResult result = mvc.perform(post(url)).andExpect(request().asyncStarted()).andReturn();
-        MockHttpServletResponse response = result.getResponse();
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (!response.getContentAsString().contains("event:suggestion")
-               && !response.getContentAsString().contains("event:error")
-               && System.currentTimeMillis() < deadline) {
-            Thread.sleep(50);
-        }
-        return response.getContentAsString();
+        return SseTestSupport.awaitFinalEvent(result.getResponse());
     }
 }

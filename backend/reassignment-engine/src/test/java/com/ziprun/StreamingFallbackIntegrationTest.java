@@ -31,12 +31,7 @@ class StreamingFallbackIntegrationTest {
     void streamAnnouncesFallbackAndStillDelivers() throws Exception {
         MvcResult result = mvc.perform(post("/orders/ORD-004/suggest/stream"))
             .andExpect(request().asyncStarted()).andReturn();
-        long deadline = System.currentTimeMillis() + 10_000;
-        while (!result.getResponse().getContentAsString().contains("event:suggestion")
-               && System.currentTimeMillis() < deadline) {
-            Thread.sleep(50);
-        }
-        String body = result.getResponse().getContentAsString();
+        String body = SseTestSupport.awaitFinalEvent(result.getResponse());
 
         assertThat(body).contains("event:restart", "HALLUCINATED_AGENT", "event:suggestion",
             "rule-based (AI fallback: HALLUCINATED_AGENT)");
