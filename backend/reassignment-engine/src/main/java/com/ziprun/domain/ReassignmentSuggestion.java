@@ -71,6 +71,10 @@ public class ReassignmentSuggestion {
     @Column(nullable = true)
     private String source;
 
+    /** How long routing took to produce this (ms, including any AI calls). Null for older rows. */
+    @Column(nullable = true)
+    private Long routingMillis;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
@@ -111,6 +115,9 @@ public class ReassignmentSuggestion {
 
     public String getSource() { return source; }
     public void setSource(String source) { this.source = source; }
+
+    public Long getRoutingMillis() { return routingMillis; }
+    public void setRoutingMillis(Long routingMillis) { this.routingMillis = routingMillis; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

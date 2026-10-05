@@ -25,8 +25,10 @@ This project automates that recovery. When an agent goes offline, the system fin
 ## Features
 
 - **Automatic re-planning.** Changing an agent's status triggers a background re-plan. Offline strands their orders; Busy or Offline withdraws suggestions that point at them; becoming Available re-balances everything waiting.
-- **Two routing strategies, switchable at runtime:** `ai` (Gemini, with Groq as backup) and `rule-based` (least effective load). New strategies plug in as a single class.
-- **AI you can trust:** every recommended agent is checked against the real roster, and any AI failure (timeout, quota, bad JSON, made-up agent) falls back to rule-based. Each suggestion is labelled with what actually produced it, e.g. `ai:gemini` or `rule-based (AI fallback: TIMEOUT)`.
+- **Automatic offline detection:** agents' phone apps send a heartbeat (`POST /agents/{id}/heartbeat`). If it stops for 60 seconds, the agent is marked Offline and their orders are re-planned, with nobody clicking anything. The Fleet page can simulate an agent's app.
+- **Two routing strategies, switchable at runtime:** `ai` (Gemini, with Groq as backup) and `rule-based` (least effective load). The choice is saved and survives restarts. New strategies plug in as a single class.
+- **AI you can trust:** every recommended agent is checked against the real roster, and any AI failure (timeout, quota, bad JSON, made-up agent) falls back to rule-based. Each suggestion is labelled with what actually produced it, e.g. `ai:gemini` or `rule-based (AI fallback: TIMEOUT)`. Confidence is capped when the roster is thin, so no strategy can claim certainty it doesn't have.
+- **Insights:** acceptance rate, confidence and response time per strategy (AI vs rule-based vs fallback), the AI fallback rate, and an activity log of everything ops and the system did.
 - **Load balancing:** routing counts active orders *plus* suggestions already queued, so a batch of stranded orders is spread across agents instead of piling onto one.
 - **Human in the loop:** the system only suggests. Ops accepts, rejects, reassigns manually, or keeps an order with its original agent once they're available again.
 - **Live reasoning:** "Get suggestion" streams the AI's explanation as it is generated (Server-Sent Events).
@@ -35,8 +37,22 @@ This project automates that recovery. When an agent goes offline, the system fin
 
 ## Getting started
 
-**Prerequisites:** Java 17+, Maven 3.8+, Node 18+.
 An LLM key is optional. Without one, every suggestion comes from the rule-based strategy and is labelled that way.
+
+### With Docker (one command)
+
+Needs only Docker (Docker Desktop on Windows/macOS).
+
+```bash
+cp .env.example .env        # optional: add GEMINI_API_KEY / GROQ_API_KEY
+docker compose up --build
+```
+
+Open http://localhost:4200 (the backend is on http://localhost:8080). The database lives in a Docker volume, so it survives restarts; `docker compose down -v` resets it.
+
+### Without Docker
+
+**Prerequisites:** Java 17+, Maven 3.8+, Node 18+.
 
 ```bash
 # 1. Backend  ->  http://localhost:8080
@@ -63,8 +79,10 @@ On first start an empty database is filled from `data.sql`: 5 agents and 8 order
 4. **Accept** one. The order moves to the new agent and both agents' order counts update.
 5. **Reject** another, then click **Get suggestion** on it to watch the reasoning stream in.
 6. Set **Kiran** to **Busy**. His suggestions are withdrawn and re-planned to Rahul. Set him back to **Available** and the batch is re-balanced across both.
-7. Switch **Routing** between **AI** and **Rule-based** in the top bar. It applies to the next suggestion, with no restart.
-8. Use **New order** (top right), the **Fleet** page (every agent and their orders) and the **Orders** page (search, filter, mark delivered). The moon icon at the bottom of the sidebar switches to dark mode.
+7. Switch **Routing** between **AI** and **Rule-based** in the top bar. It applies to the next suggestion, with no restart, and is remembered after restarts.
+8. On the **Fleet** page, click **Connect app** for an Available agent (simulating their phone), then **Disconnect app**. About 60 seconds later the system marks them Offline by itself and their orders appear in the queue.
+9. Open **Insights** to compare AI and rule-based acceptance rates and read the activity log.
+10. Use **New order** (top right) and the **Orders** page (search, filter, mark delivered). The moon icon at the bottom of the sidebar switches to dark mode.
 
 The same flow with curl:
 
@@ -84,7 +102,7 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 
 | Change | What the system does |
 |---|---|
-| → `OFFLINE` | Their orders become `REASSIGNMENT_PENDING` and are re-planned; open suggestions recommending them are withdrawn |
+| → `OFFLINE` (by ops, or automatically when their app's heartbeats stop) | Their orders become `REASSIGNMENT_PENDING` and are re-planned; open suggestions recommending them are withdrawn |
 | `AVAILABLE` → `BUSY` | Open suggestions recommending them are withdrawn and those orders re-planned; their own orders stay with them |
 | → `AVAILABLE` | Every waiting order is re-planned against the larger roster |
 
@@ -102,9 +120,12 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 | `POST` | `/orders/{id}/keep` | original agent is `AVAILABLE` again: order returns to `ASSIGNED`, open suggestions `EXPIRED` |
 | `GET` | `/agents?status=` | |
 | `PATCH` | `/agents/{id}/status` | triggers re-planning in the background and returns immediately; 409 if it would leave no `AVAILABLE` agent |
+| `POST` | `/agents/{id}/heartbeat` | the agent's phone app checking in; no heartbeat for `AGENTS_HEARTBEAT_TIMEOUT_SECONDS` → automatic `OFFLINE` |
 | `GET` | `/suggestions?status=` | `PENDING`, `ACCEPTED`, `REJECTED`, `EXPIRED` (withdrawn by the system) |
 | `PATCH` | `/suggestions/{id}` | `{status: ACCEPTED \| REJECTED}`; accept reassigns the order atomically |
-| `GET` / `PUT` | `/routing/strategy` | view / switch the active strategy at runtime `{strategy}` |
+| `GET` / `PUT` | `/routing/strategy` | view / switch the active strategy at runtime `{strategy}` (saved, survives restarts) |
+| `GET` | `/metrics` | suggestion outcomes per source (AI / rule-based / fallback): acceptance rate, confidence, response time |
+| `GET` | `/activity?limit=50` | activity log, newest first: who did what, when (`ops` or `system`) |
 
 Errors always have one shape: `{status, error, message, path, timestamp, details}`, with 400 (bad input), 404 (unknown id) and 409 (conflicts with current state).
 
@@ -114,7 +135,8 @@ All settings live in `application.properties` and can be overridden with environ
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `ROUTING_STRATEGY` | `ai` | strategy at startup (`ai`, `rule-based`); `PUT /routing/strategy` changes it until the next restart |
+| `ROUTING_STRATEGY` | `ai` | first-run strategy (`ai`, `rule-based`); once someone switches in the UI, the saved choice wins |
+| `AGENTS_HEARTBEAT_TIMEOUT_SECONDS` | `60` | an agent whose app sent heartbeats but then stops for this long is marked Offline |
 | `LLM_PROVIDERS` | `gemini,groq` | providers tried in order; ones without a key are skipped |
 | `GEMINI_API_KEY` (or `LLM_API_KEY`) | none | Gemini key |
 | `GEMINI_MODEL` | `gemini-3.6-flash` | |
@@ -155,9 +177,9 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-41 tests, run on every push by GitHub Actions. They need no API keys: they use an in-memory database and a test-only fake LLM.
-- **Unit:** rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction.
-- **End-to-end** (HTTP + background loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; re-balance when an agent becomes available; recommendation refused if the agent went offline mid-routing; keep with original agent; manual reassign; last Available agent protected; structured errors; async fallback when the AI makes up an agent; SSE streaming, including fallback.
+53 tests, run on every push by GitHub Actions (which also builds the Docker images and smoke-tests the running stack). They need no API keys: they use an in-memory database and a test-only fake LLM.
+- **Unit:** rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction, saved strategy on restart, thin-roster confidence cap.
+- **End-to-end** (HTTP + background loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; re-balance when an agent becomes available; recommendation refused if the agent went offline mid-routing; keep with original agent; manual reassign; last Available agent protected; structured errors; async fallback when the AI makes up an agent; SSE streaming, including fallback; heartbeat auto-offline (and manual override); activity log and metrics.
 
 ## Roadmap
 
@@ -167,5 +189,6 @@ mvn test
 - **Schema migrations** with Flyway, and Postgres instead of H2.
 - **Authentication** for the API and ops console.
 - **Push updates** (SSE/WebSocket) to the UI instead of polling.
+- **A real agent app** sending heartbeats (the Fleet page simulates one today).
 
 Design reasoning for each of these, and for what's already built, is in [ADR.md](ADR.md).

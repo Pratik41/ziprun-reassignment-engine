@@ -1,5 +1,6 @@
 package com.ziprun.service.suggestion;
 
+import com.ziprun.domain.Activity;
 import com.ziprun.domain.AgentStatus;
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
@@ -13,6 +14,7 @@ import com.ziprun.repository.AgentRepository;
 import com.ziprun.repository.OrderRepository;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
 import com.ziprun.routing.RoutingResult;
+import com.ziprun.service.activity.ActivityService;
 import com.ziprun.service.order.OrderService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,17 +45,20 @@ public class SuggestionServiceImpl implements SuggestionService {
     private final OrderRepository orderRepository;
     private final AgentRepository agentRepository;
     private final OrderService orderService;
+    private final ActivityService activity;
 
     public SuggestionServiceImpl(
             ReassignmentSuggestionRepository suggestionRepository,
             OrderRepository orderRepository,
             AgentRepository agentRepository,
-            OrderService orderService
+            OrderService orderService,
+            ActivityService activity
     ) {
         this.suggestionRepository = suggestionRepository;
         this.orderRepository = orderRepository;
         this.agentRepository = agentRepository;
         this.orderService = orderService;
+        this.activity = activity;
     }
 
     @Override
@@ -73,6 +78,7 @@ public class SuggestionServiceImpl implements SuggestionService {
         suggestion.setConfidence(result.getConfidence());
         suggestion.setReasoning(truncate(result.getReasoning()));
         suggestion.setSource(result.getSource());
+        suggestion.setRoutingMillis(result.getRoutingMillis());
         suggestion.setStatus(SuggestionStatus.PENDING);
         suggestion.setTriggerReason(triggerReason);
         suggestion.setCreatedAt(LocalDateTime.now());
@@ -81,6 +87,11 @@ public class SuggestionServiceImpl implements SuggestionService {
         log.info("Suggestion created: id={}, order={}, agent={}, confidence={}, trigger={}, source={}",
             saved.getId(), orderId, saved.getRecommendedAgentId(), saved.getConfidence(),
             triggerReason, saved.getSource());
+        activity.record(Activity.Type.SUGGESTION_CREATED,
+            triggerReason == TriggerReason.AGENT_OFFLINE ? Activity.Actor.SYSTEM : Activity.Actor.OPS,
+            String.format("Suggested %s for %s (%s, %d%% confidence)", name(saved.getRecommendedAgentId()), orderId,
+                saved.getSource(), Math.round(saved.getConfidence() * 100)),
+            orderId, saved.getRecommendedAgentId(), saved.getId());
         return saved;
     }
 
@@ -170,6 +181,11 @@ public class SuggestionServiceImpl implements SuggestionService {
         suggestion.setStatus(newStatus);
         suggestion.setDecidedAt(now);
         log.info("Suggestion {}: order={}, agent={}", newStatus, suggestion.getOrderId(), suggestion.getRecommendedAgentId());
+        boolean accepted = newStatus == SuggestionStatus.ACCEPTED;
+        activity.record(accepted ? Activity.Type.SUGGESTION_ACCEPTED : Activity.Type.SUGGESTION_REJECTED, Activity.Actor.OPS,
+            String.format("%s suggestion for %s → %s (%s)", accepted ? "Accepted" : "Rejected", suggestion.getOrderId(),
+                name(suggestion.getRecommendedAgentId()), suggestion.getSource()),
+            suggestion.getOrderId(), suggestion.getRecommendedAgentId(), suggestionId);
         return suggestion;
     }
 
@@ -189,6 +205,11 @@ public class SuggestionServiceImpl implements SuggestionService {
             s.setDecidedAt(now);
             log.info("Suggestion {} EXPIRED: recommended agent {} is no longer AVAILABLE (order {})", s.getId(), agentId, s.getOrderId());
         });
+        if (!stale.isEmpty()) {
+            activity.record(Activity.Type.SUGGESTIONS_WITHDRAWN, Activity.Actor.SYSTEM,
+                String.format("%d suggestion(s) withdrawn: %s is no longer available", stale.size(), name(agentId)),
+                null, agentId, null);
+        }
         return stale.stream().map(ReassignmentSuggestion::getOrderId).distinct().toList();
     }
 
@@ -203,6 +224,9 @@ public class SuggestionServiceImpl implements SuggestionService {
         expirePendingFor(orderId);
         log.info("Order {} kept with original agent {} (back online); pending suggestions expired",
             orderId, kept.getAssignedAgentId());
+        activity.record(Activity.Type.ORDER_KEPT, Activity.Actor.OPS,
+            String.format("%s kept with %s (available again)", orderId, name(kept.getAssignedAgentId())),
+            orderId, kept.getAssignedAgentId(), null);
         return kept;
     }
 
@@ -211,24 +235,39 @@ public class SuggestionServiceImpl implements SuggestionService {
         List<String> stranded = orderRepository.findByStatus(OrderStatus.REASSIGNMENT_PENDING).stream()
             .map(Order::getId)
             .toList();
-        stranded.forEach(this::expirePendingFor);
+        int withdrawn = stranded.stream().mapToInt(this::expirePendingFor).sum();
+        if (withdrawn > 0) {
+            activity.record(Activity.Type.SUGGESTIONS_WITHDRAWN, Activity.Actor.SYSTEM,
+                String.format("Re-balancing %d waiting order(s): %d open suggestion(s) withdrawn", stranded.size(), withdrawn));
+        }
         return stranded;
     }
 
     @Override
     public Order reassignManually(String orderId, String newAgentId) {
+        String fromAgent = orderService.getById(orderId).getAssignedAgentId();
         Order moved = orderService.reassignToAgent(orderId, newAgentId);
         expirePendingFor(orderId);
         log.info("Order {} manually reassigned to {}; open suggestions expired", orderId, newAgentId);
+        activity.record(Activity.Type.ORDER_REASSIGNED, Activity.Actor.OPS,
+            String.format("%s reassigned by hand: %s → %s", orderId, name(fromAgent), name(newAgentId)),
+            orderId, newAgentId, null);
         return moved;
     }
 
-    private void expirePendingFor(String orderId) {
+    /** @return how many suggestions were expired */
+    private int expirePendingFor(String orderId) {
         LocalDateTime now = LocalDateTime.now();
-        suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING).forEach(s -> {
+        List<ReassignmentSuggestion> open = suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING);
+        open.forEach(s -> {
             s.setStatus(SuggestionStatus.EXPIRED);
             s.setDecidedAt(now);
         });
+        return open.size();
+    }
+
+    private String name(String agentId) {
+        return agentRepository.findById(agentId).map(a -> a.getName()).orElse(agentId);
     }
 
     private static String truncate(String reasoning) {

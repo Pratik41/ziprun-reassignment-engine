@@ -1,7 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
-import { Order } from '../models';
-import { AGENT_STATUS, ORDER_STATUS } from '../labels';
+import { Agent, Order } from '../models';
+import { AGENT_STATUS, ORDER_STATUS, timeAgo } from '../labels';
+import { HeartbeatSimulatorService } from '../services/heartbeat-simulator.service';
 import { StoreService } from '../services/store.service';
+import { ToastService } from '../services/toast.service';
 import { AgentStatusControlComponent } from '../ui/agent-status-control.component';
 import { AvatarComponent } from '../ui/avatar.component';
 import { IconComponent } from '../ui/icon.component';
@@ -60,6 +62,19 @@ import { IconComponent } from '../ui/icon.component';
               }
             </div>
 
+            @if (a.statusNote) {
+              <div class="callout tone-warning note"><app-icon name="wifi-off" [size]="14" /><span class="grow">{{ a.statusNote }}</span></div>
+            }
+
+            <div class="app-row" [class.live]="sim.isConnected(a.id)">
+              <app-icon [name]="sim.isConnected(a.id) ? 'activity' : 'wifi-off'" [size]="14" />
+              <span class="grow">{{ appStatus(a) }}</span>
+              <button class="btn btn-ghost btn-sm" (click)="toggleApp(a)"
+                      [attr.title]="sim.isConnected(a.id) ? 'Stop sending heartbeats' : 'Simulate this agent\\'s phone app sending heartbeats'">
+                {{ sim.isConnected(a.id) ? 'Disconnect app' : 'Connect app' }}
+              </button>
+            </div>
+
             <footer class="agent-foot">
               <app-agent-status-control [agent]="a" />
               @if (store.isLastAvailable(a)) {
@@ -87,10 +102,16 @@ import { IconComponent } from '../ui/icon.component';
     .none, .more { font-size: 12.5px; padding: 6px 8px; }
     .agent-foot { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 1px solid var(--border); background: var(--surface-2); border-radius: 0 0 var(--radius-lg) var(--radius-lg); flex-wrap: wrap; }
     .hint { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+    .note { margin: 0 14px 10px; font-size: 12.5px; }
+    .app-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 18px; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--text-3); }
+    .app-row.live { color: var(--success-text); }
+    .app-row .grow { flex: 1; }
   `],
 })
 export class FleetPage {
   readonly store = inject(StoreService);
+  readonly sim = inject(HeartbeatSimulatorService);
+  private readonly toast = inject(ToastService);
   readonly statusLabels = AGENT_STATUS;
   readonly orderLabels = ORDER_STATUS;
 
@@ -125,5 +146,28 @@ export class FleetPage {
 
   effective(agentId: string, active: number): number {
     return active + (this.store.pendingByAgent().get(agentId) ?? 0);
+  }
+
+  appStatus(a: Agent): string {
+    const seen = a.lastHeartbeatAt ? `last heartbeat ${timeAgo(a.lastHeartbeatAt, this.store.lastUpdated() ?? new Date())}` : '';
+    if (this.sim.isConnected(a.id)) {
+      return `Phone app connected${seen ? ' · ' + seen : ''}`;
+    }
+    if (a.lastHeartbeatAt && a.status !== 'OFFLINE') {
+      return `App silent · ${seen} (auto-offline after 60s)`;
+    }
+    return 'No phone app connected';
+  }
+
+  toggleApp(a: Agent): void {
+    const first = a.name.split(' ')[0];
+    if (this.sim.isConnected(a.id)) {
+      this.sim.disconnect(a.id);
+      this.toast.info(`${first}'s app disconnected`,
+        `If no heartbeat arrives for 60 seconds, ${first} is marked Offline automatically and their orders are re-planned.`);
+    } else {
+      this.sim.connect(a.id);
+      this.toast.info(`Simulating ${first}'s phone app`, 'Sending a heartbeat every 10 seconds from this browser tab.');
+    }
   }
 }

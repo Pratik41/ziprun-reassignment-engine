@@ -59,7 +59,7 @@ Adding the zone strategy = one new class `@Component("zone-affinity") class Zone
 
 **Tradeoffs accepted**  
 - Implicit wiring: a reader must know Spring fills the map by bean name.
-- The runtime switch is in-memory and per-instance: a restart reverts to config, and multiple instances would each need the PUT. For one ops service that's fine; with several instances I'd move the value to the database or a config server.
+- ~~The runtime switch is in-memory: a restart reverts to config.~~ **Update:** losing the choice on every restart surprised users in practice, so the switch is now saved in an `app_settings` table and restored at startup (`routing.strategy` is only the first-run default). Several instances would still each cache the value in memory until restart; a shared config store would fix that.
 - The switch endpoint has no auth (same as the rest of the API for now).
 
 ---
@@ -91,6 +91,7 @@ Option 3. Every failure is an `LLMException` with a `Kind`, handled at the layer
 
 - **Provider chain** (`routing/gateway/LLMGateway`): `llm.providers=gemini,groq` tries Gemini then Groq. Transport failures move on to the next provider; content failures don't, because a different model's opinion doesn't fix a validation problem we can fix deterministically.
 - **The fallback is visible**, not silent: the suggestion's `source` field records e.g. `rule-based (AI fallback: TIMEOUT)`, and the UI shows it as an amber tag. Every fallback also logs the order ID, trigger and kind.
+- **Confidence guardrail:** a validated answer can still be overconfident. Groq once gave 0.95 to the only available agent, who would have carried 8 orders. `RoutingService.applyRosterLimits` caps every strategy's confidence at 0.60 on a thin roster (fewer candidates than stranded orders, with a note telling ops to add capacity) and at 0.75 with a single candidate. Putting the cap in the routing service rather than the prompt means it holds no matter which model or strategy answered.
 - **Async path:** `AIRoutingStrategy` falls back with the *same* `RoutingContext`, so a failed AI re-plan still produces an `AGENT_OFFLINE` suggestion with recovery reasoning. `AIFallbackIntegrationTest` checks this with a test-only fake LLM that returns a hallucinated agent.
 - **Testing failures on purpose:** the test suite registers a fake provider (`src/test/.../MockLLMProvider`, `llm.mock.fail-mode=timeout|rate-limit|garbage|hallucinate`). It lives only in test code; the application talks to real LLMs only.
 
@@ -253,6 +254,30 @@ Recovery speed is bounded by ops response time. That is the intended trade: wron
 
 ---
 
+## ADR-10: Noticing Offline Agents Automatically (Heartbeats)
+
+**Context**  
+The loop reacted to status changes, but someone still had to *notice* an agent was gone and click Offline. A dead phone, crash or dropped connection could go unnoticed for a long time: exactly the "fails silently when no one is watching" problem the project exists to solve.
+
+**Options considered**
+1. *Keep it manual* - simplest, but the "observe" step depends on a person.
+2. *Agents' apps send heartbeats; a monitor marks silent agents OFFLINE* - small API surface, works with any client.
+3. *Persistent connections (WebSocket) and offline on disconnect* - instant, but needs connection management and misfires on brief network blips.
+
+**Decision**  
+Option 2. `POST /agents/{id}/heartbeat` records `lastHeartbeatAt`. `HeartbeatMonitor` runs every 5 s and, for on-duty agents silent for longer than `agents.heartbeat.timeout-seconds` (60), calls `AgentService.markOfflineIfSilentSince`. That re-checks under a transaction (a heartbeat may just have arrived), sets OFFLINE with an explanatory `statusNote`, publishes the normal `AgentOfflineEvent` and logs an `AGENT_AUTO_OFFLINE` activity. A scheduled check is the right tool *here* (unlike for the re-plan loop in ADR-4) because the event being detected is time passing. Rules:
+- Only agents whose app has reported at least once are monitored (`lastHeartbeatAt` not null), so hand-managed agents are unaffected.
+- Auto-offline bypasses the "keep one agent Available" guardrail: it reports a fact, it isn't a request.
+- An app reconnecting does **not** put the agent back on duty. The note says so, and ops decides (the ADR-9 checkpoint).
+- A manual status change clears the note and pauses monitoring until the next heartbeat, so a stale timestamp can't instantly undo ops' decision.
+
+**Tradeoffs accepted**  
+- Detection lag of up to timeout + check interval (~65 s). Shorter timeouts catch failures faster but risk false offlines on flaky mobile networks.
+- The monitor runs in every backend instance; with several instances one should be elected (or use a shared scheduler lock).
+- There is no real agent app yet; the Fleet page simulates one from the browser.
+
+---
+
 ## Summary Table
 
 | ADR | Topic | Decision | Key point |
@@ -266,6 +291,7 @@ Recovery speed is bounded by ops response time. That is the intended trade: wron
 | 7 | Prompts | Routine request vs incident report | Model knows it's recovering and sees the whole batch |
 | 8 | Idempotency | Pre-check + re-check under row lock | No duplicates even with concurrent triggers |
 | 9 | Checkpoint | Queue, never auto-assign | Accept is atomic; criteria for removing it defined |
+| 10 | Offline detection | Heartbeats + scheduled monitor → normal OFFLINE event | Nobody has to notice; ops still decides when they're back |
 
 ---
 

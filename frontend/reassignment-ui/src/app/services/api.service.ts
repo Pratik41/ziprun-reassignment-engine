@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Agent, AgentStatus, Order, OrderStatus, StrategyInfo, Suggestion } from '../models';
+import { Activity, Agent, AgentStatus, MetricsSummary, Order, OrderStatus, StrategyInfo, Suggestion } from '../models';
 
 export interface SuggestionStreamHandlers {
   start?: (strategy: string) => void;
@@ -62,6 +62,18 @@ export class ApiService {
 
   keepWithCurrentAgent(orderId: string): Observable<Order> {
     return this.http.post<Order>(`${this.apiUrl}/orders/${orderId}/keep`, {});
+  }
+
+  sendHeartbeat(agentId: string): Observable<Agent> {
+    return this.http.post<Agent>(`${this.apiUrl}/agents/${agentId}/heartbeat`, {});
+  }
+
+  getActivity(limit = 60): Observable<Activity[]> {
+    return this.http.get<Activity[]>(`${this.apiUrl}/activity`, { params: { limit } });
+  }
+
+  getMetrics(): Observable<MetricsSummary> {
+    return this.http.get<MetricsSummary>(`${this.apiUrl}/metrics`);
   }
 
   getRoutingStrategy(): Observable<StrategyInfo> {

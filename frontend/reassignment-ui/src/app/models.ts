@@ -12,6 +12,10 @@ export interface Agent {
   activeOrderCount: number;
   currentZone: string | null;
   maxCapacity: number | null;
+  /** Last check-in from the agent's phone app; null = no app being monitored. */
+  lastHeartbeatAt: string | null;
+  /** Why the system last changed their status (e.g. automatic offline). */
+  statusNote: string | null;
 }
 
 export interface Order {
@@ -35,8 +39,44 @@ export interface Suggestion {
   triggerReason: TriggerReason;
   /** e.g. "ai:gemini", "rule-based", "rule-based (AI fallback: TIMEOUT)" */
   source: string | null;
+  /** How long routing took, including any AI calls. */
+  routingMillis: number | null;
   createdAt: string;
   decidedAt: string | null;
+}
+
+export interface Activity {
+  id: number;
+  at: string;
+  type: string;
+  actor: 'ops' | 'system';
+  orderId: string | null;
+  agentId: string | null;
+  suggestionId: string | null;
+  message: string;
+}
+
+export interface SourceStats {
+  key: 'ai' | 'rule-based' | 'fallback' | 'unknown';
+  label: string;
+  total: number;
+  accepted: number;
+  rejected: number;
+  expired: number;
+  pending: number;
+  acceptanceRate: number | null;
+  avgConfidence: number | null;
+  avgRoutingMs: number | null;
+  p95RoutingMs: number | null;
+}
+
+export interface MetricsSummary {
+  totalSuggestions: number;
+  decided: number;
+  acceptanceRate: number | null;
+  aiFallbackRate: number | null;
+  aiProviders: Record<string, number>;
+  bySource: SourceStats[];
 }
 
 export interface StrategyInfo {

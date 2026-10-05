@@ -215,6 +215,43 @@ class ReassignmentFlowIntegrationTest {
     }
 
     @Test
+    void thinRosterSuggestionsAreCappedAndExplained() throws Exception {
+        // Only Rahul is available for Priya's 3 stranded orders
+        setAgentStatus("AGT-004", "BUSY");
+        setAgentStatus("AGT-001", "OFFLINE");
+
+        assertThat(awaitPendingReplans(3)).allSatisfy(s -> {
+            assertThat(s.getConfidence()).isLessThanOrEqualTo(0.60);
+            assertThat(s.getReasoning()).contains("Thin roster: 3 stranded order(s) but only 1 available agent(s)");
+        });
+    }
+
+    @Test
+    void historyAndMetricsReflectWhatHappened() throws Exception {
+        setAgentStatus("AGT-001", "OFFLINE");
+        ReassignmentSuggestion s = awaitPendingReplans(3).get(0);
+        mvc.perform(patch("/suggestions/" + s.getId()).contentType(MediaType.APPLICATION_JSON).content("{\"status\":\"ACCEPTED\"}"))
+            .andExpect(status().isOk());
+
+        mvc.perform(get("/activity"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].type").value("SUGGESTION_ACCEPTED"))
+            .andExpect(jsonPath("$[0].actor").value("ops"))
+            .andExpect(jsonPath("$[?(@.type == 'AGENT_STATUS')]").exists())
+            .andExpect(jsonPath("$[?(@.type == 'SUGGESTION_CREATED' && @.actor == 'system')]").exists());
+
+        mvc.perform(get("/metrics"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.totalSuggestions").value(3))
+            .andExpect(jsonPath("$.decided").value(1))
+            .andExpect(jsonPath("$.acceptanceRate").value(1.0))
+            .andExpect(jsonPath("$.aiProviders.mock").value(3))
+            .andExpect(jsonPath("$.bySource[0].key").value("ai"))
+            .andExpect(jsonPath("$.bySource[0].accepted").value(1))
+            .andExpect(jsonPath("$.bySource[0].avgRoutingMs").isNumber());
+    }
+
+    @Test
     void suggestionForAnAgentWhoWentOfflineMidRoutingIsRefused() throws Exception {
         // Routing picked Kiran, but Kiran went offline before the suggestion was saved
         RoutingResult picked = new RoutingResult("AGT-004", 0.9, "Kiran is free", "ai:gemini");

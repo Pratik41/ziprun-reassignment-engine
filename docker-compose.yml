@@ -1,0 +1,30 @@
+# One-command startup:  docker compose up --build
+#   UI       -> http://localhost:4200
+#   Backend  -> http://localhost:8080
+# Optional API keys go in a .env file next to this one (see .env.example).
+# Without keys, suggestions use the rule-based strategy and are labelled that way.
+
+services:
+  backend:
+    build: ./backend/reassignment-engine
+    ports:
+      - "8080:8080"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      ROUTING_STRATEGY: ${ROUTING_STRATEGY:-ai}
+      AGENTS_HEARTBEAT_TIMEOUT_SECONDS: ${AGENTS_HEARTBEAT_TIMEOUT_SECONDS:-60}
+    volumes:
+      - ziprun-data:/app/data   # H2 database survives container restarts
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend/reassignment-ui
+    ports:
+      - "4200:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  ziprun-data:

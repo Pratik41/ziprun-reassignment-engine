@@ -1,6 +1,7 @@
 package com.ziprun.domain;
 
 import jakarta.persistence.*;
+import java.time.LocalDateTime;
 
 /**
  * Delivery agent entity.
@@ -45,6 +46,17 @@ public class Agent {
     private Integer maxCapacity;
 
     /**
+     * When the agent's phone app last checked in. Null means no app is reporting
+     * (or ops changed the status by hand since), so the heartbeat monitor ignores them.
+     */
+    @Column(nullable = true)
+    private LocalDateTime lastHeartbeatAt;
+
+    /** Why the system last changed this agent's status, e.g. an automatic offline. Cleared by manual changes. */
+    @Column(nullable = true, length = 200)
+    private String statusNote;
+
+    /**
      * Only AVAILABLE agents are offered new orders (BUSY = online but not taking more).
      */
     public boolean canTakeOrders() {
@@ -77,4 +89,10 @@ public class Agent {
 
     public Integer getMaxCapacity() { return maxCapacity; }
     public void setMaxCapacity(Integer maxCapacity) { this.maxCapacity = maxCapacity; }
+
+    public LocalDateTime getLastHeartbeatAt() { return lastHeartbeatAt; }
+    public void setLastHeartbeatAt(LocalDateTime lastHeartbeatAt) { this.lastHeartbeatAt = lastHeartbeatAt; }
+
+    public String getStatusNote() { return statusNote; }
+    public void setStatusNote(String statusNote) { this.statusNote = statusNote; }
 }

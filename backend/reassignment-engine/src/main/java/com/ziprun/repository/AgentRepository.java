@@ -9,6 +9,8 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 
 @Repository
@@ -16,6 +18,9 @@ public interface AgentRepository extends JpaRepository<Agent, String> {
     List<Agent> findByStatus(AgentStatus status);
 
     List<Agent> findByStatusIn(List<AgentStatus> statuses);
+
+    /** On-duty agents whose app has gone quiet since the cutoff (heartbeat monitor). */
+    List<Agent> findByStatusInAndLastHeartbeatAtBefore(Collection<AgentStatus> statuses, LocalDateTime cutoff);
 
     /**
      * Locks the matching rows (SELECT ... FOR UPDATE) so two concurrent status

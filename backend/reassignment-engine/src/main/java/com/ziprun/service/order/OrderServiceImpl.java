@@ -1,5 +1,6 @@
 package com.ziprun.service.order;
 
+import com.ziprun.domain.Activity;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
 import com.ziprun.domain.Order;
@@ -8,6 +9,7 @@ import com.ziprun.exception.InvalidStateException;
 import com.ziprun.exception.NotFoundException;
 import com.ziprun.repository.AgentRepository;
 import com.ziprun.repository.OrderRepository;
+import com.ziprun.service.activity.ActivityService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -35,10 +37,12 @@ public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
     private final AgentRepository agentRepository;
+    private final ActivityService activity;
 
-    public OrderServiceImpl(OrderRepository orderRepository, AgentRepository agentRepository) {
+    public OrderServiceImpl(OrderRepository orderRepository, AgentRepository agentRepository, ActivityService activity) {
         this.orderRepository = orderRepository;
         this.agentRepository = agentRepository;
+        this.activity = activity;
     }
 
     @Override
@@ -63,6 +67,9 @@ public class OrderServiceImpl implements OrderService {
 
         log.info("Order created: id={}, agent={}, activeOrders={}",
             saved.getId(), assignedAgentId, agent.getActiveOrderCount());
+        activity.record(Activity.Type.ORDER_CREATED, Activity.Actor.OPS,
+            String.format("%s created for %s: %s", saved.getId(), agent.getName(), description),
+            saved.getId(), assignedAgentId, null);
         return saved;
     }
 
@@ -111,7 +118,10 @@ public class OrderServiceImpl implements OrderService {
         order.transitionTo(newStatus);
 
         if (newStatus == OrderStatus.DELIVERED) {
-            agentRepository.findById(order.getAssignedAgentId()).ifPresent(Agent::releaseOrder);
+            Agent agent = getAgent(order.getAssignedAgentId());
+            agent.releaseOrder();
+            activity.record(Activity.Type.ORDER_DELIVERED, Activity.Actor.OPS,
+                String.format("%s delivered by %s", orderId, agent.getName()), orderId, agent.getId(), null);
         }
 
         log.info("Order status updated: id={}, status={}", orderId, newStatus);

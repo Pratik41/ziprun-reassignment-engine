@@ -19,6 +19,7 @@ Code paths are relative to `backend/reassignment-engine/src/main/java/com/ziprun
 12. [Things you might not know](#12-things-you-might-not-know)
 13. [Known limitations](#13-known-limitations)
 14. [Troubleshooting](#14-troubleshooting)
+15. [History and metrics (Insights)](#15-history-and-metrics-insights)
 
 ---
 
@@ -116,6 +117,25 @@ Every agent status change goes through `AgentServiceImpl.updateStatus`, which sa
 | `BUSY`/`OFFLINE` → `AVAILABLE` | `AgentAvailableEvent` | More capacity: withdraw the open suggestions of **every** waiting order and re-plan all of them, so they spread across the bigger roster. |
 | `OFFLINE` → `BUSY` | none | The agent wasn't taking orders before and still isn't; nothing to re-plan. |
 
+### Automatic offline detection (heartbeats)
+
+A person doesn't have to notice that someone dropped out. Each agent's phone app calls `POST /agents/{id}/heartbeat` every few seconds. A background check (`service/agent/HeartbeatMonitor`, every 5 s) looks for on-duty agents whose last heartbeat is older than `AGENTS_HEARTBEAT_TIMEOUT_SECONDS` (default 60) and marks them `OFFLINE`. That publishes the same `AgentOfflineEvent`, so everything below happens exactly as if ops had clicked Offline.
+
+```mermaid
+flowchart LR
+    APP["Agent's phone app"] -- "heartbeat every ~10s" --> API["POST /agents/{id}/heartbeat<br/>lastHeartbeatAt = now"]
+    MON["HeartbeatMonitor<br/>every 5s"] --> Q{"On duty and silent<br/>for over 60s?"}
+    Q -- "no" --> MON
+    Q -- "yes" --> OFF["Mark OFFLINE<br/>note: 'Auto-offline: no heartbeat since …'"]
+    OFF --> EV(["AgentOfflineEvent<br/>(same loop as a manual Offline)"])
+```
+
+- **Only agents whose app has reported are monitored.** An agent with no `lastHeartbeatAt` is never auto-offlined, so agents managed by hand are unaffected.
+- **It's a fact, not a request,** so the "keep one agent Available" guardrail doesn't block it.
+- **The app reconnecting doesn't put them back on duty.** The note changes to "App reconnected…", but whether they're back on shift is ops' decision.
+- **A manual status change wins.** It clears the note and pauses monitoring until the app sends its next heartbeat, so a stale heartbeat can't immediately flip the agent back.
+- **Try it:** on the Fleet page, **Connect app** simulates an agent's phone (a heartbeat every 10 s from your browser). **Disconnect app** and watch them go Offline about a minute later.
+
 ### Step by step: an agent goes offline
 
 ```mermaid
@@ -188,7 +208,16 @@ flowchart TD
 
 - **Candidates** are only `AVAILABLE` agents. Busy agents are still delivering and don't take more; Offline agents can't.
 - **The order's own agent is excluded**, because "reassign to the same person" isn't a reassignment. That's why an order whose agent is back shows **"Keep with …"** instead.
-- **Switching strategy** (`PUT /routing/strategy` or the toggle) affects the next routing call on both paths. Existing suggestions keep the tag of whatever made them.
+- **Switching strategy** (`PUT /routing/strategy` or the toggle) affects the next routing call on both paths. The choice is saved in the database (`app_settings`) and restored on restart; `ROUTING_STRATEGY` is only the first-run default. Existing suggestions keep the tag of whatever made them.
+- **Confidence guardrail.** Whatever the strategy says, `RoutingService` caps confidence when the roster can't support certainty:
+
+  | Situation | Max confidence | Extra reasoning |
+  |---|---|---|
+  | Re-plan with fewer available agents than stranded orders ("thin roster") | 0.60 | "Thin roster: N stranded order(s) but only M available agent(s); consider making more agents available." |
+  | Only one candidate (nothing to compare against) | 0.75 | none |
+
+  This was added after the AI gave 0.95 confidence to the only available agent, who would have ended up with 8 orders.
+- **Timing.** Each routing call is timed, including any AI calls, and the time is stored on the suggestion (`routingMillis`) for the Insights page.
 
 ---
 
@@ -445,6 +474,8 @@ The model replies in JSON. `ReasoningExtractor` decodes only the `reasoning` fie
 | At least one agent stays `AVAILABLE` | otherwise routing has no candidates and every stranded order is stuck | `AgentServiceImpl` (rows locked, safe for simultaneous clicks) + disabled buttons in the UI |
 | Only `AVAILABLE` agents get new orders (create, reassign, accept, keep) | `BUSY` means "not taking more" | `OrderServiceImpl`, `SuggestionServiceImpl` + filtered dropdowns |
 | AI answers are checked against the real roster | models sometimes invent IDs | `AIRoutingStrategy.validate` |
+| Confidence is capped on a thin roster (0.60) or a single candidate (0.75) | no strategy should sound certain when the fleet can't back it up | `RoutingService.applyRosterLimits` |
+| Silent agents are taken off duty automatically | a dead phone or a crash shouldn't wait for someone to notice | `HeartbeatMonitor` + `AgentServiceImpl.markOfflineIfSilentSince` |
 | A suggestion is re-checked right before saving | the roster can change while the AI thinks | `SuggestionServiceImpl.createSuggestion` |
 | Order status changes follow the state machine | no impossible jumps (e.g. DELIVERED → ASSIGNED) | `OrderStatus.canTransitionTo` |
 | Errors always have one JSON shape | the UI can show the server's message | `exception/GlobalExceptionHandler` |
@@ -453,7 +484,8 @@ The model replies in JSON. `ReasoningExtractor` decodes only the `reasoning` fie
 
 ## 12. Things you might not know
 
-- **The strategy toggle resets on restart.** It's kept in memory; on startup the backend uses `ROUTING_STRATEGY` (default `ai`). To always start in rule-based, set `ROUTING_STRATEGY=rule-based`.
+- **The strategy toggle is remembered.** It's saved in the database, so a restart keeps your choice. `ROUTING_STRATEGY` only applies until someone switches for the first time.
+- **Every change is in the activity log.** Status changes, suggestions, decisions, reassignments and strategy switches are all recorded with `ops` or `system` as the actor (Insights page, or `GET /activity`).
 - **"Get suggestion" uses the *initial* prompt even for a stranded order**, and its card is tagged "Requested". Only the background loop uses the recovery prompt.
 - **Rejecting doesn't automatically ask again.** The order waits until ops clicks Get suggestion, reassigns, or an agent status change triggers a re-plan.
 - **Becoming Available replaces suggestions on screen.** A re-balance withdraws and recreates every waiting order's suggestion. If you click Accept on one being replaced, you'll get a message; the next refresh shows the new one.
@@ -473,12 +505,12 @@ Honest list of what isn't solved yet (most are on the Roadmap in the README):
 
 | Limitation | Impact | Possible fix |
 |---|---|---|
-| AI can be overconfident with one candidate (seen: 0.95 for an agent who'd carry 8 orders) | Confidence looks better than the situation | Cap confidence in code when candidates < stranded orders, and add a thin-roster note to rule-based reasoning |
+| Heartbeats come from a browser simulator, not a real agent app | Automatic offline detection works, but needs an app to send heartbeats | Build the agent app (on the Roadmap) |
 | Background events aren't durable | If the backend dies mid-loop, unfinished orders wait for the next trigger | Outbox table or a message broker |
 | Schema comes from `ddl-auto=update` | Adding an enum value needs a manual `ALTER` on existing H2 databases | Flyway migrations |
 | No authentication | Anyone who can reach the API can change statuses or the strategy | Spring Security |
 | UI polls every 3 seconds | Up to 3 s delay, constant small requests | Push updates over SSE/WebSocket |
-| Single backend instance assumed | The strategy toggle and in-process events are per instance | Shared config store + broker |
+| Single backend instance assumed | In-process events and the heartbeat monitor run per instance | A message broker, and one elected monitor |
 
 ---
 
@@ -491,4 +523,23 @@ Honest list of what isn't solved yet (most are on the Roadmap in the README):
 | A waiting order has no suggestion | No other agent is Available (its own agent is excluded) | Make an agent Available, or use **Keep with …** if its agent is back |
 | "X is the only AVAILABLE agent…" (409) | The last-available guardrail | Make another agent Available first |
 | Accept fails with "…isn't taking new orders" | The recommended agent went Busy/Offline since the suggestion was made | Wait for the refresh; a new suggestion replaces it |
-| Backend won't start: `UnsupportedClassVersionError` | Running on Java 8/11 | Use Java 17+ (`JAVA_HOME`) |
+| Backend won't start: `UnsupportedClassVersionError` | Running on Java 8/11 | Use Java 17+ (`JAVA_HOME`), or run with `docker compose up --build` |
+| An agent went Offline on their own | Their app stopped sending heartbeats (see the note on their Fleet card) | Set them Available again when they're back on shift |
+
+---
+
+## 15. History and metrics (Insights)
+
+The **Insights** page answers "is the AI actually better than rule-based?" from real decisions.
+
+| Metric | How it's calculated |
+|---|---|
+| Acceptance rate (per source and overall) | accepted ÷ (accepted + rejected). `EXPIRED` suggestions were withdrawn by the system, not judged by a person, so they don't count either way. |
+| AI fallback rate | rule-based fallbacks ÷ (AI answers + fallbacks): how often the AI was tried but couldn't answer |
+| Average confidence | mean confidence of suggestions from that source |
+| Response time | average and 95th-percentile `routingMillis` (time to produce a suggestion, AI calls included). Suggestions created before timing existed show "-". |
+| AI providers | how many AI suggestions Gemini and Groq each produced |
+
+Sources are read from each suggestion's `source`: `ai:*` → AI, `…fallback…` → AI fallback, `rule-based` → Rule-based, empty → "Before tracking".
+
+The **activity log** (`activity_log` table, `GET /activity`) records every meaningful change: agent status (by ops, or automatic), orders created/delivered/reassigned/kept, suggestions created/accepted/rejected/withdrawn, and strategy switches. Each entry is written in the same transaction as the change it describes, so the log never shows something that didn't actually happen.

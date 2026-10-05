@@ -26,7 +26,12 @@ import { IconComponent } from '../ui/icon.component';
           <li class="agent">
             <app-avatar [agentId]="a.id" [agentName]="a.name" [status]="a.status" size="sm" />
             <div class="who">
-              <div class="name">{{ a.name }}</div>
+              <div class="name">
+                {{ a.name }}
+                @if (a.statusNote) {
+                  <span class="note-icon" [attr.title]="a.statusNote"><app-icon name="wifi-off" [size]="12" /></span>
+                }
+              </div>
               <div class="load" [attr.title]="loadTitle(a.id, a.activeOrderCount)">
                 <div class="meter neutral"><span [style.width.%]="loadPct(a.activeOrderCount)"></span></div>
                 <span class="subtle">{{ a.activeOrderCount }}@if (pending(a.id)) {<span class="pend"> +{{ pending(a.id) }}</span>}</span>
@@ -55,6 +60,7 @@ import { IconComponent } from '../ui/icon.component';
     .load { display: flex; align-items: center; gap: 8px; font-size: 12px; }
     .load .meter { flex: 1; max-width: 90px; height: 4px; }
     .pend { color: var(--primary-text); font-weight: 600; }
+    .note-icon { display: inline-flex; vertical-align: -1px; margin-left: 4px; color: var(--warning-text); cursor: help; }
     .legend { font-size: 11.5px; padding: 10px 16px; border-top: 1px solid var(--border); }
   `],
 })
