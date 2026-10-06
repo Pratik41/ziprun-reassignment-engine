@@ -7,6 +7,7 @@ import { ApiService, errorMessage } from '../services/api.service';
 import { StoreService } from '../services/store.service';
 import { ToastService } from '../services/toast.service';
 import { AvatarComponent } from '../ui/avatar.component';
+import { DueBadgeComponent } from '../ui/due-badge.component';
 import { IconComponent } from '../ui/icon.component';
 
 interface LiveReasoning {
@@ -18,12 +19,14 @@ interface LiveReasoning {
 /**
  * One order waiting for a new agent: its open suggestion(s) with reasoning and
  * accept/reject, or (if none) a streamed "Get suggestion", plus manual reassign
- * and "keep with original agent".
+ * and "keep with original agent". Also used for orders still with their agent
+ * that are about to miss their deadline (an SLA_RISK suggestion): rejecting
+ * keeps them where they are.
  */
 @Component({
   selector: 'app-queue-item',
   standalone: true,
-  imports: [FormsModule, AvatarComponent, IconComponent],
+  imports: [FormsModule, AvatarComponent, DueBadgeComponent, IconComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './queue-item.component.html',
   styleUrl: './queue-item.component.css',
@@ -57,6 +60,26 @@ export class QueueItemComponent implements OnDestroy {
     return this.store.openSuggestionsByOrder().get(this.order.id) ?? [];
   }
 
+  /** Not stranded: the order is still with its agent and only its deadline is at risk. */
+  get stillAssigned(): boolean {
+    return this.order.status !== 'REASSIGNMENT_PENDING';
+  }
+
+  get route(): string | null {
+    const from = this.store.zoneName(this.order.pickupZone);
+    const to = this.store.zoneName(this.order.dropoffZone);
+    return from || to ? `${from ?? '?'} → ${to ?? '?'}` : null;
+  }
+
+  agentMeta(agentId: string): string {
+    const a = this.store.agentById().get(agentId);
+    if (!a) {
+      return '';
+    }
+    const zone = this.store.zoneName(a.currentZone);
+    return `${this.store.loadOfCapacity(a)} orders` + (zone ? ` · ${zone}` : '');
+  }
+
   get originalAgent() {
     return this.store.agentById().get(this.order.assignedAgentId);
   }
@@ -88,7 +111,9 @@ export class QueueItemComponent implements OnDestroy {
   reject(s: Suggestion): void {
     this.run(s.id, this.api.decideSuggestion(s.id, 'REJECTED'),
       'Suggestion rejected', 'Couldn\'t reject the suggestion',
-      'The order stays in the queue: get a new suggestion or reassign it manually.');
+      this.stillAssigned
+        ? `${this.order.id} stays with ${this.originalAgent?.name ?? 'its agent'}.`
+        : 'The order stays in the queue: get a new suggestion or reassign it manually.');
   }
 
   keep(): void {

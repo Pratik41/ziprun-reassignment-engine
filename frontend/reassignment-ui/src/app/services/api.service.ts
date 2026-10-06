@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Activity, Agent, AgentStatus, MetricsSummary, Order, OrderStatus, RecommendResponse, StrategyInfo, Suggestion } from '../models';
+import { Activity, Agent, AgentStatus, AppConfig, MetricsSummary, NewOrderRequest, Order, OrderStatus, RecommendResponse, StrategyInfo, Suggestion } from '../models';
 
 export interface SuggestionStreamHandlers {
   start?: (strategy: string) => void;
@@ -45,13 +45,22 @@ export class ApiService {
   }
 
   /** recommendedAgentId: the top pick shown in the dialog, so Insights can track how often it's followed. */
-  createOrder(description: string, assignedAgentId: string, recommendedAgentId?: string | null): Observable<Order> {
-    return this.http.post<Order>(`${this.apiUrl}/orders`, { description, assignedAgentId, recommendedAgentId: recommendedAgentId ?? null });
+  createOrder(order: NewOrderRequest): Observable<Order> {
+    return this.http.post<Order>(`${this.apiUrl}/orders`, order);
   }
 
   /** Ranks Available agents for an order that doesn't exist yet. Nothing is saved. */
-  recommendAgents(description: string): Observable<RecommendResponse> {
-    return this.http.post<RecommendResponse>(`${this.apiUrl}/routing/recommend`, { description });
+  recommendAgents(description: string, pickupZone: string | null, dropoffZone: string | null): Observable<RecommendResponse> {
+    return this.http.post<RecommendResponse>(`${this.apiUrl}/routing/recommend`, { description, pickupZone, dropoffZone });
+  }
+
+  getConfig(): Observable<AppConfig> {
+    return this.http.get<AppConfig>(`${this.apiUrl}/config`);
+  }
+
+  /** Zone and capacity; null zone = unknown, null capacity = fleet default. */
+  updateAgent(agentId: string, currentZone: string | null, maxCapacity: number | null): Observable<Agent> {
+    return this.http.patch<Agent>(`${this.apiUrl}/agents/${agentId}`, { currentZone, maxCapacity });
   }
 
   updateOrderStatus(orderId: string, status: OrderStatus): Observable<Order> {

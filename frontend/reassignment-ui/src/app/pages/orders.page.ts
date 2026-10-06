@@ -7,6 +7,7 @@ import { ApiService, errorMessage } from '../services/api.service';
 import { StoreService } from '../services/store.service';
 import { ToastService } from '../services/toast.service';
 import { AvatarComponent } from '../ui/avatar.component';
+import { DueBadgeComponent } from '../ui/due-badge.component';
 import { IconComponent } from '../ui/icon.component';
 
 type Filter = 'ALL' | OrderStatus;
@@ -15,7 +16,7 @@ type Filter = 'ALL' | OrderStatus;
 @Component({
   selector: 'app-orders-page',
   standalone: true,
-  imports: [FormsModule, RouterLink, AvatarComponent, IconComponent],
+  imports: [FormsModule, RouterLink, AvatarComponent, DueBadgeComponent, IconComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
     <div class="page">
@@ -45,7 +46,7 @@ type Filter = 'ALL' | OrderStatus;
         <div class="table-wrap">
           <table class="table">
             <thead>
-              <tr><th>Order</th><th>Agent</th><th>Status</th><th>Created</th><th class="right"></th></tr>
+              <tr><th>Order</th><th>Agent</th><th>Status</th><th>Due</th><th>Created</th><th class="right"></th></tr>
             </thead>
             <tbody>
               @for (o of rows(); track o.id) {
@@ -53,6 +54,7 @@ type Filter = 'ALL' | OrderStatus;
                   <td>
                     <div class="mono strong">{{ o.id }}</div>
                     <div class="muted">{{ o.description }}</div>
+                    @if (route(o); as r) { <div class="subtle small">{{ r }}</div> }
                   </td>
                   <td>
                     @if (store.agentById().get(o.assignedAgentId); as a) {
@@ -68,6 +70,10 @@ type Filter = 'ALL' | OrderStatus;
                     }
                   </td>
                   <td><span class="badge" [class]="'badge tone-' + orderLabels[o.status].tone"><span class="dot"></span>{{ orderLabels[o.status].label }}</span></td>
+                  <td class="nowrap">
+                    @if (o.status !== 'DELIVERED') { <app-due-badge [due]="o.slaDeadline" /> }
+                    @if (o.status === 'DELIVERED' || !o.slaDeadline) { <span class="subtle">-</span> }
+                  </td>
                   <td class="muted nowrap" [attr.title]="o.createdAt">{{ ago(o.createdAt) }}</td>
                   <td class="right">
                     @if (o.status === 'REASSIGNMENT_PENDING') {
@@ -80,7 +86,7 @@ type Filter = 'ALL' | OrderStatus;
                   </td>
                 </tr>
               } @empty {
-                <tr><td colspan="5">
+                <tr><td colspan="6">
                   <div class="empty">
                     <span class="empty-icon"><app-icon name="package" [size]="22" /></span>
                     <h3>{{ store.loaded() ? 'No orders here' : 'Loading orders…' }}</h3>
@@ -136,6 +142,12 @@ export class OrdersPage {
 
   ago(iso: string): string {
     return timeAgo(iso, this.store.lastUpdated() ?? new Date());
+  }
+
+  route(o: Order): string | null {
+    const from = this.store.zoneName(o.pickupZone);
+    const to = this.store.zoneName(o.dropoffZone);
+    return from || to ? `${from ?? '?'} → ${to ?? '?'}` : null;
   }
 
   markDelivered(o: Order): void {

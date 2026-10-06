@@ -14,6 +14,7 @@ import com.ziprun.service.order.OrderService;
 import com.ziprun.service.suggestion.SuggestionService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -75,7 +76,8 @@ public class OrderController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Order createOrder(@Valid @RequestBody CreateOrderRequest request) {
-        return orderService.createOrder(request.description(), request.assignedAgentId(), request.recommendedAgentId());
+        return orderService.createOrder(new OrderService.NewOrder(request.description(), request.assignedAgentId(),
+            request.recommendedAgentId(), request.pickupZone(), request.dropoffZone(), request.slaMinutes()));
     }
 
     /**
@@ -233,9 +235,14 @@ public class OrderController {
 
     // ============ DTOs ============
 
-    /** recommendedAgentId: optional, the top pick from POST /routing/recommend that ops was shown. */
-    public record CreateOrderRequest(@NotBlank String description, @NotBlank String assignedAgentId,
-                                     String recommendedAgentId) {
+    /**
+     * recommendedAgentId: optional, the top pick from POST /routing/recommend that ops was shown.
+     * pickupZone / dropoffZone: optional Zones ids. slaMinutes: optional deadline from now
+     * (null = default, 0 = none).
+     */
+    public record CreateOrderRequest(@NotBlank @Size(max = 500) String description, @NotBlank String assignedAgentId,
+                                     String recommendedAgentId, String pickupZone, String dropoffZone,
+                                     Integer slaMinutes) {
     }
 
     public record UpdateStatusRequest(@NotBlank String status) {

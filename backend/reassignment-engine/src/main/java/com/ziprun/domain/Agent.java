@@ -11,9 +11,8 @@ import java.time.LocalDateTime;
  *    agents are routing candidates. activeOrderCount is the load metric routing uses.
  * 2. Load changes go through assignOrder()/releaseOrder() so the counter can't be
  *    corrupted by ad-hoc arithmetic in services.
- * 3. currentZone and maxCapacity are nullable placeholders for planned zone-affinity
- *    routing and capacity limits; when those land they populate existing columns
- *    instead of needing a migration.
+ * 3. currentZone feeds zone-aware routing; maxCapacity caps effective load (null =
+ *    the fleet default, agents.default-max-capacity). Both editable from the Fleet page.
  */
 @Entity
 @Table(name = "agents")
@@ -33,14 +32,14 @@ public class Agent {
     private Integer activeOrderCount;
 
     /**
-     * Zone the agent is currently in. Nullable; input for a planned zone-affinity strategy.
+     * Zone the agent is currently in (a Zones id). Nullable = unknown location.
      */
     @Column(nullable = true)
     private String currentZone;
 
     /**
-     * Maximum concurrent orders; null means "no limit configured".
-     * Not enforced yet: routing will filter on activeOrderCount < maxCapacity once populated.
+     * Most orders (active + queued suggestions) routing will give this agent;
+     * null = use the fleet default (agents.default-max-capacity).
      */
     @Column(nullable = true)
     private Integer maxCapacity;

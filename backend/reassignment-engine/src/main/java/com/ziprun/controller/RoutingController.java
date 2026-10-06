@@ -17,7 +17,7 @@ import java.util.Set;
  *
  * GET /routing/strategy  - { "active": "ai", "available": ["ai", "rule-based"] }
  * PUT /routing/strategy  - body { "strategy": "rule-based" } switches with no restart
- * POST /routing/recommend - body { "description": "..." } top agents for a new order (nothing is saved)
+ * POST /routing/recommend - body { "description", "pickupZone"?, "dropoffZone"? } top agents for a new order (nothing is saved)
  * GET /routing/providers  - LLM providers in chain order with circuit-breaker state (CLOSED / OPEN / HALF_OPEN)
  */
 @RestController
@@ -52,8 +52,9 @@ public class RoutingController {
      */
     @PostMapping("/recommend")
     public RecommendResponse recommend(@Valid @RequestBody(required = false) RecommendRequest request) {
-        String description = request == null ? null : request.description();
-        List<RoutingResult> options = routingService.recommendForNewOrder(description, MAX_RECOMMENDATIONS);
+        RecommendRequest body = request == null ? new RecommendRequest(null, null, null) : request;
+        List<RoutingResult> options = routingService.recommendForNewOrder(
+            body.description(), body.pickupZone(), body.dropoffZone(), MAX_RECOMMENDATIONS);
         return new RecommendResponse(routingService.getActiveStrategyName(), options);
     }
 
@@ -76,7 +77,7 @@ public class RoutingController {
     public record StrategyResponse(String active, Set<String> available) {
     }
 
-    public record RecommendRequest(@Size(max = 500) String description) {
+    public record RecommendRequest(@Size(max = 500) String description, String pickupZone, String dropoffZone) {
     }
 
     public record RecommendResponse(String strategy, List<RoutingResult> options) {

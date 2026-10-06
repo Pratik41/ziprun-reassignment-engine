@@ -1,5 +1,6 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { Agent } from '../models';
 import { StoreService } from '../services/store.service';
 import { AgentStatusControlComponent } from '../ui/agent-status-control.component';
 import { AvatarComponent } from '../ui/avatar.component';
@@ -33,10 +34,15 @@ import { IconComponent } from '../ui/icon.component';
                     <span class="note-icon" [attr.title]="a.statusNote"><app-icon name="wifi-off" [size]="12" /></span>
                   }
                 </div>
+                @if (store.zoneName(a.currentZone); as zone) {
+                  <div class="zone subtle">{{ zone }}</div>
+                }
               </div>
-              <div class="load" [attr.title]="loadTitle(a.id, a.activeOrderCount)">
-                <div class="meter neutral"><span [style.width.%]="loadPct(a.activeOrderCount)"></span></div>
-                <span class="subtle nowrap">{{ a.activeOrderCount }}@if (pending(a.id)) {<span class="pend"> +{{ pending(a.id) }}</span>}</span>
+              <div class="load" [attr.title]="loadTitle(a)">
+                <div class="meter" [class.neutral]="!store.isFull(a)" [class.low]="store.isFull(a)">
+                  <span [style.width.%]="loadPct(a)"></span>
+                </div>
+                <span class="subtle nowrap">{{ a.activeOrderCount }}@if (pending(a.id)) {<span class="pend">+{{ pending(a.id) }}</span>}@if (store.capacityOf(a)) {<span class="cap">/{{ store.capacityOf(a) }}</span>}</span>
               </div>
             </div>
             <app-agent-status-control [agent]="a" [compact]="true" [stretch]="true" class="ctl" />
@@ -48,7 +54,7 @@ import { IconComponent } from '../ui/icon.component';
         }
       </ul>
       <footer class="legend subtle">
-        Bar = active orders · <span class="pend">+n</span> = suggestions queued for them
+        Bar = load vs capacity · <span class="pend">+n</span> = suggestions queued for them · red = full
       </footer>
     </section>
   `,
@@ -61,7 +67,9 @@ import { IconComponent } from '../ui/icon.component';
     .ctl { padding-left: 36px; }
     .who { flex: 1; min-width: 0; }
     .name { font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .load { display: flex; align-items: center; gap: 8px; font-size: 12px; flex: none; width: 110px; }
+    .zone { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .load { display: flex; align-items: center; gap: 8px; font-size: 12px; flex: none; width: 118px; }
+    .cap { color: var(--text-3); }
     .load .meter { flex: 1; height: 4px; }
     .pend { color: var(--primary-text); font-weight: 600; }
     .note-icon { display: inline-flex; vertical-align: -1px; margin-left: 4px; color: var(--warning-text); cursor: help; }
@@ -77,18 +85,23 @@ export class FleetPanelComponent {
     return [...this.store.agents()].sort((a, b) => rank[a.status] - rank[b.status] || a.name.localeCompare(b.name));
   });
 
-  private readonly maxLoad = computed(() => Math.max(6, ...this.store.agents().map(a => a.activeOrderCount)));
+  /** Scale for agents without a capacity: the heaviest load in the fleet (at least 6). */
+  private readonly maxLoad = computed(() => Math.max(6, ...this.store.agents().map(a => this.store.effectiveLoad(a))));
 
-  loadPct(active: number): number {
-    return Math.min(100, (active / this.maxLoad()) * 100);
+  loadPct(a: Agent): number {
+    const scale = this.store.capacityOf(a) || this.maxLoad();
+    return Math.min(100, (this.store.effectiveLoad(a) / scale) * 100);
   }
 
   pending(agentId: string): number {
     return this.store.pendingByAgent().get(agentId) ?? 0;
   }
 
-  loadTitle(agentId: string, active: number): string {
-    const p = this.pending(agentId);
-    return `${active} active order${active === 1 ? '' : 's'}` + (p ? `, ${p} suggestion${p === 1 ? '' : 's'} queued` : '');
+  loadTitle(a: Agent): string {
+    const active = a.activeOrderCount;
+    const p = this.pending(a.id);
+    const capacity = this.store.capacityOf(a);
+    return `${active} active order${active === 1 ? '' : 's'}` + (p ? `, ${p} suggestion${p === 1 ? '' : 's'} queued` : '')
+      + (capacity ? ` (capacity ${capacity}${this.store.isFull(a) ? ', full: not suggested for more' : ''})` : '');
   }
 }

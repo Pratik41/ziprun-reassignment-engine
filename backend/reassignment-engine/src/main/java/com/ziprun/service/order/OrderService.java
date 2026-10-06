@@ -22,13 +22,34 @@ public interface OrderService {
      * @throws com.ziprun.exception.InvalidStateException if the agent is not AVAILABLE
      */
     default Order createOrder(String description, String assignedAgentId) {
-        return createOrder(description, assignedAgentId, null);
+        return createOrder(new NewOrder(description, assignedAgentId, null, null, null, null));
     }
 
     /**
      * Same, recording the agent the recommendation engine suggested (null if none was shown).
      */
-    Order createOrder(String description, String assignedAgentId, String recommendedAgentId);
+    default Order createOrder(String description, String assignedAgentId, String recommendedAgentId) {
+        return createOrder(new NewOrder(description, assignedAgentId, recommendedAgentId, null, null, null));
+    }
+
+    /**
+     * Full form: zones are Zones ids (optional); slaMinutes sets the delivery deadline
+     * (null = orders.default-sla-minutes, 0 = no deadline).
+     *
+     * @throws IllegalArgumentException for an unknown zone or a negative slaMinutes
+     */
+    Order createOrder(NewOrder newOrder);
+
+    record NewOrder(String description, String assignedAgentId, String recommendedAgentId,
+                    String pickupZone, String dropoffZone, Integer slaMinutes) {
+    }
+
+    /**
+     * SLA monitor: claims the order for an at-risk alert (sets slaAlertedAt).
+     *
+     * @return the order if this call claimed it; empty if it was already alerted or is no longer active
+     */
+    Optional<Order> claimSlaAlert(String orderId);
 
     Optional<Order> findById(String orderId);
 

@@ -9,8 +9,8 @@ import java.time.LocalDateTime;
  *
  * Key design decisions:
  * 1. State machine: ASSIGNED → REASSIGNMENT_PENDING → REASSIGNED → DELIVERED
- * 2. pickupZone, dropoffZone and slaDeadline are nullable, reserved for planned
- *    zone-aware routing and SLA-driven re-planning (see Roadmap in README)
+ * 2. pickupZone / dropoffZone (Zones ids) feed zone-aware routing; slaDeadline feeds
+ *    the SLA monitor. All nullable: an order without them is routed on load alone.
  * 3. Suggestions are queried by orderId via repository (no bidirectional relationship)
  * 4. createdAt tracks when order was assigned
  */
@@ -35,8 +35,8 @@ public class Order {
     private LocalDateTime createdAt;
 
     /**
-     * Pickup location zone (e.g., "KORAMANGALA", "HSR_LAYOUT").
-     * Nullable; shown to the AI when set, and the input for a planned zone-affinity strategy.
+     * Pickup location zone (a Zones id, e.g. "KORAMANGALA"). Nullable.
+     * Routing prefers agents in or next to it; the AI sees it too.
      */
     @Column(nullable = true)
     private String pickupZone;
@@ -48,8 +48,8 @@ public class Order {
     private String dropoffZone;
 
     /**
-     * Delivery deadline. Nullable and not used yet: a planned SLA monitor will
-     * trigger a re-plan as the deadline approaches (see ADR-5).
+     * Delivery deadline, set at creation (orders.default-sla-minutes unless given).
+     * Nullable. The SLA monitor flags orders close to it and suggests a faster agent.
      */
     @Column(nullable = true)
     private LocalDateTime slaDeadline;
@@ -64,6 +64,10 @@ public class Order {
 
     @Column(nullable = true)
     private Boolean followedRecommendation;
+
+    /** When the SLA monitor flagged this order as likely to miss slaDeadline (once per order). */
+    @Column(nullable = true)
+    private LocalDateTime slaAlertedAt;
 
     /**
      * Moves the order through its state machine; rejects illegal transitions.
@@ -117,4 +121,6 @@ public class Order {
     public void setRecommendedAgentId(String recommendedAgentId) { this.recommendedAgentId = recommendedAgentId; }
     public Boolean getFollowedRecommendation() { return followedRecommendation; }
     public void setFollowedRecommendation(Boolean followedRecommendation) { this.followedRecommendation = followedRecommendation; }
+    public LocalDateTime getSlaAlertedAt() { return slaAlertedAt; }
+    public void setSlaAlertedAt(LocalDateTime slaAlertedAt) { this.slaAlertedAt = slaAlertedAt; }
 }

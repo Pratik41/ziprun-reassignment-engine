@@ -138,6 +138,19 @@ public class SuggestionServiceImpl implements SuggestionService {
     }
 
     @Override
+    public Optional<ReassignmentSuggestion> createSlaSuggestionIfAbsent(String orderId, RoutingResult result) {
+        Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(() -> new NotFoundException("Order", orderId));
+        if (order.getStatus() != OrderStatus.ASSIGNED && order.getStatus() != OrderStatus.REASSIGNED) {
+            log.info("Order {} is {} now; dropping SLA suggestion", orderId, order.getStatus());
+            return Optional.empty();
+        }
+        if (!suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING).isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(createSuggestion(orderId, result, TriggerReason.SLA_RISK));
+    }
+
+    @Override
     public ReassignmentSuggestion updateStatus(String suggestionId, SuggestionStatus newStatus) {
         log.debug("Deciding suggestion: id={}, newStatus={}", suggestionId, newStatus);
 

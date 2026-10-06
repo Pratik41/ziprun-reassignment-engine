@@ -17,6 +17,8 @@ const ACTIVITY_STYLE: Record<string, { icon: string; tone: string }> = {
   SUGGESTION_REJECTED: { icon: 'x', tone: 'danger' },
   SUGGESTIONS_WITHDRAWN: { icon: 'refresh', tone: 'warning' },
   STRATEGY_SWITCHED: { icon: 'scale', tone: 'violet' },
+  AGENT_UPDATED: { icon: 'truck', tone: 'neutral' },
+  SLA_AT_RISK: { icon: 'clock', tone: 'danger' },
 };
 
 const SOURCE_ICON: Record<string, string> = { ai: 'sparkles', 'rule-based': 'scale', fallback: 'alert', unknown: 'clock' };

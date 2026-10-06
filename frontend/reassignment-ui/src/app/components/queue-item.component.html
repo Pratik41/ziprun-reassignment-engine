@@ -4,13 +4,21 @@
     <div class="order-ident">
       <div class="row">
         <span class="mono order-id">{{ order.id }}</span>
-        <span class="badge tone-warning"><span class="dot"></span>Needs agent</span>
+        @if (stillAssigned) {
+          <span class="badge tone-danger" title="Still with its agent, but likely to miss its delivery deadline"><span class="dot"></span>Deadline at risk</span>
+        } @else {
+          <span class="badge tone-warning"><span class="dot"></span>Needs agent</span>
+        }
+        <app-due-badge [due]="order.slaDeadline" />
       </div>
       <div class="order-desc">{{ order.description }}</div>
+      @if (route) {
+        <div class="route subtle"><app-icon name="truck" [size]="12" />{{ route }}</div>
+      }
     </div>
     <div class="was-with">
       @if (originalAgent; as a) {
-        <span class="subtle">Was with</span>
+        <span class="subtle">{{ stillAssigned ? 'With' : 'Was with' }}</span>
         <span class="was-name">{{ a.name }}</span>
         <span class="badge" [class]="'badge tone-' + agentStatus[a.status].tone">{{ agentStatus[a.status].label }}</span>
       }
@@ -18,7 +26,7 @@
   </header>
 
   <!-- Original agent is available again -->
-  @if (originalAgentBack) {
+  @if (originalAgentBack && !stillAssigned) {
     <div class="callout tone-success back">
       <app-icon name="undo" />
       <span class="grow"><strong>{{ originalAgent?.name }}</strong> is available again and can keep this order.</span>
@@ -40,9 +48,7 @@
                         [status]="store.agentById().get(s.recommendedAgentId)?.status ?? null" />
             <div>
               <div class="agent-name">{{ store.agentName(s.recommendedAgentId) }}</div>
-              <div class="agent-meta subtle">
-                {{ store.agentById().get(s.recommendedAgentId)?.activeOrderCount ?? 0 }} active orders
-              </div>
+              <div class="agent-meta subtle">{{ agentMeta(s.recommendedAgentId) }}</div>
             </div>
           </div>
         </div>
@@ -56,7 +62,11 @@
         </div>
 
         <div class="tags">
-          @if (s.triggerReason === 'AGENT_OFFLINE') {
+          @if (s.triggerReason === 'SLA_RISK') {
+            <span class="badge tone-danger" title="Created automatically: the order is close to its deadline and this agent could start it sooner.">
+              <app-icon name="clock" [size]="12" />Deadline re-plan
+            </span>
+          } @else if (s.triggerReason === 'AGENT_OFFLINE') {
             <span class="badge tone-primary" title="Created automatically when agent availability changed. No one requested it.">
               <app-icon name="zap" [size]="12" />Auto re-plan
             </span>
@@ -132,7 +142,7 @@
         @if (reassignTargets.length > 0) {
           <select class="select" [(ngModel)]="reassignTarget" aria-label="Agent to reassign to">
             @for (a of reassignTargets; track a.id) {
-              <option [value]="a.id">{{ a.name }} · {{ a.activeOrderCount }} active</option>
+              <option [value]="a.id">{{ a.name }} · {{ store.loadOfCapacity(a) }}{{ store.isFull(a) ? ' · full' : '' }}{{ store.zoneName(a.currentZone) ? ' · ' + store.zoneName(a.currentZone) : '' }}</option>
             }
           </select>
           <button class="btn btn-primary btn-sm" [disabled]="!reassignTarget || busy() !== null" (click)="submitReassign()">

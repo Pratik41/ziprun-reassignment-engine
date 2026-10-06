@@ -9,6 +9,7 @@ import com.ziprun.domain.event.AgentOfflineEvent;
 import com.ziprun.exception.InvalidStateException;
 import com.ziprun.exception.NotFoundException;
 import com.ziprun.repository.AgentRepository;
+import com.ziprun.routing.Zones;
 import com.ziprun.service.activity.ActivityService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,6 +39,9 @@ public class AgentServiceImpl implements AgentService {
     private static final Logger log = LoggerFactory.getLogger(AgentServiceImpl.class);
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH:mm:ss");
     private static final String AUTO_OFFLINE_PREFIX = "Auto-offline";
+
+    /** Sanity limit for a per-agent capacity. */
+    static final int MAX_CAPACITY = 50;
 
     private final AgentRepository agentRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -158,6 +162,25 @@ public class AgentServiceImpl implements AgentService {
                 "%s is the only AVAILABLE agent and can't be set to %s. Make another agent AVAILABLE first.",
                 agent.getName(), newStatus));
         }
+    }
+
+    @Override
+    public Agent updateDetails(String agentId, String currentZone, Integer maxCapacity) {
+        Agent agent = agentRepository.findById(agentId).orElseThrow(() -> new NotFoundException("Agent", agentId));
+        String zone = currentZone == null || currentZone.isBlank() ? null : currentZone;
+        if (zone != null && !Zones.isKnown(zone)) {
+            throw new IllegalArgumentException("Unknown zone '" + zone + "'. See GET /config for the list");
+        }
+        if (maxCapacity != null && (maxCapacity < 1 || maxCapacity > MAX_CAPACITY)) {
+            throw new IllegalArgumentException("maxCapacity must be between 1 and " + MAX_CAPACITY + ", or null for the fleet default");
+        }
+        agent.setCurrentZone(zone);
+        agent.setMaxCapacity(maxCapacity);
+        activity.record(Activity.Type.AGENT_UPDATED, Activity.Actor.OPS,
+            String.format("%s: zone %s, capacity %s", agent.getName(),
+                zone == null ? "unknown" : Zones.name(zone), maxCapacity == null ? "fleet default" : maxCapacity),
+            null, agentId, null);
+        return agent;
     }
 
     @Override

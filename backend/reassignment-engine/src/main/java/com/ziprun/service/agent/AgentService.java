@@ -58,5 +58,15 @@ public interface AgentService {
      */
     boolean markOfflineIfSilentSince(String agentId, LocalDateTime cutoff);
 
+    /**
+     * Ops edits where the agent is and how many orders they can carry.
+     *
+     * @param currentZone a Zones id, or null/blank for unknown
+     * @param maxCapacity 1..50, or null for the fleet default
+     * @throws com.ziprun.exception.NotFoundException if agent not found
+     * @throws IllegalArgumentException for an unknown zone or out-of-range capacity
+     */
+    Agent updateDetails(String agentId, String currentZone, Integer maxCapacity);
+
     Agent save(Agent agent);
 }

@@ -17,6 +17,7 @@ import java.util.List;
  * POST   /agents              - Create agent (201)
  * GET    /agents?status=      - List agents (optionally filtered by status)
  * GET    /agents/{id}         - Get single agent
+ * PATCH  /agents/{id}         - Set zone and capacity
  * POST   /agents/{id}/heartbeat - Phone app check-in (missing heartbeats => automatic OFFLINE)
  * PATCH  /agents/{id}/status  - Update status; OFFLINE fires the agentic loop
  *                                asynchronously, so this returns immediately
@@ -64,6 +65,15 @@ public class AgentController {
     }
 
     /**
+     * PATCH /agents/{id} - { "currentZone": "KORAMANGALA", "maxCapacity": 5 }
+     * Both are replaced: null zone = unknown, null capacity = fleet default.
+     */
+    @PatchMapping("/{id}")
+    public Agent updateAgent(@PathVariable String id, @RequestBody UpdateAgentRequest request) {
+        return agentService.updateDetails(id, request.currentZone(), request.maxCapacity());
+    }
+
+    /**
      * POST /agents/{id}/heartbeat - called by the agent's phone app every few seconds.
      * If heartbeats stop for agents.heartbeat.timeout-seconds, the agent is marked
      * OFFLINE automatically and their orders are re-planned.
@@ -77,5 +87,8 @@ public class AgentController {
     }
 
     public record UpdateStatusRequest(@NotBlank String status) {
+    }
+
+    public record UpdateAgentRequest(String currentZone, Integer maxCapacity) {
     }
 }

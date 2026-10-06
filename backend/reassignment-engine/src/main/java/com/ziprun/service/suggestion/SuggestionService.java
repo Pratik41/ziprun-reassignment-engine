@@ -60,6 +60,15 @@ public interface SuggestionService {
     boolean hasPendingOfflineSuggestion(String orderId);
 
     /**
+     * SLA monitor: queue an SLA_RISK suggestion for an order that is still with its agent
+     * (ASSIGNED / REASSIGNED) and has no open suggestion. Locks the order row.
+     *
+     * @return the suggestion, or empty if the order moved on or already has one
+     * @throws com.ziprun.exception.StaleRecommendationException if the agent is no longer AVAILABLE
+     */
+    Optional<ReassignmentSuggestion> createSlaSuggestionIfAbsent(String orderId, RoutingResult result);
+
+    /**
      * Withdraws (EXPIRED) every PENDING suggestion that recommends this agent.
      * Called by the agentic loop when the agent stops being AVAILABLE (BUSY or OFFLINE).
      *

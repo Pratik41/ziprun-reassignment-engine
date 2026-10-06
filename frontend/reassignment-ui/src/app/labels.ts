@@ -99,3 +99,39 @@ export function timeAgo(iso: string | null, now: Date = new Date()): string {
 export function percent(c: number): string {
   return `${Math.round(c * 100)}%`;
 }
+
+export interface DeadlineState {
+  kind: 'late' | 'risk' | 'ok';
+  /** Short text for a badge: "Late 12m", "Due in 20m", "Due 14:30". */
+  label: string;
+  /** Full time for a tooltip. */
+  title: string;
+}
+
+/**
+ * Where an order stands against its delivery deadline. "risk" = inside the
+ * at-risk window the backend's SLA monitor uses (GET /config slaAtRiskMinutes).
+ */
+export function deadlineState(iso: string | null, now: Date, atRiskMinutes: number): DeadlineState | null {
+  const due = parseTime(iso);
+  if (!due) {
+    return null;
+  }
+  const minutes = Math.round((due.getTime() - now.getTime()) / 60000);
+  const clock = due.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const title = `Deliver by ${due.toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}`;
+  if (minutes < 0) {
+    return { kind: 'late', label: `Late ${duration(-minutes)}`, title };
+  }
+  if (minutes <= atRiskMinutes) {
+    return { kind: 'risk', label: `Due in ${duration(minutes)}`, title };
+  }
+  return { kind: 'ok', label: `Due ${clock}`, title };
+}
+
+function duration(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}

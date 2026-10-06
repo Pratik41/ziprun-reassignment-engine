@@ -24,7 +24,9 @@ public class Activity {
         SUGGESTION_ACCEPTED,
         SUGGESTION_REJECTED,
         SUGGESTIONS_WITHDRAWN,
-        STRATEGY_SWITCHED
+        STRATEGY_SWITCHED,
+        AGENT_UPDATED,
+        SLA_AT_RISK
     }
 
     /** "ops" = a person using the console or API; "system" = the re-planning loop or heartbeat monitor. */

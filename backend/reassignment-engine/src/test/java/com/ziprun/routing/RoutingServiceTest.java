@@ -91,6 +91,50 @@ class RoutingServiceTest {
     }
 
     @Test
+    void agentsAtCapacityAreLeftOutAndNamed() {
+        when(settings.findById(any())).thenReturn(Optional.empty());
+        var full = agent("AGT-1", 3);
+        full.setMaxCapacity(3);
+        when(agents.findByStatus(any())).thenReturn(List.of(full, agent("AGT-2", 4), agent("AGT-3", 1)));
+        when(suggestions.countPendingByRecommendedAgent()).thenReturn(List.of());
+        RoutingService service = new RoutingService(Map.of("rule-based", new RuleBasedStrategy()),
+            agents, suggestions, settings, activity, "rule-based", 6);
+
+        List<RoutingResult> ranked = service.rank(order("ORD-1"), RoutingContext.initial());
+
+        assertThat(ranked).extracting(RoutingResult::getRecommendedAgentId).containsExactly("AGT-3", "AGT-2");
+        assertThat(ranked.get(0).getReasoning()).contains("Skipped (at capacity): Name AGT-1 3/3.");
+    }
+
+    @Test
+    void everyoneFullStillSuggestsButCapsConfidenceAndWarns() {
+        when(settings.findById(any())).thenReturn(Optional.empty());
+        when(agents.findByStatus(any())).thenReturn(List.of(agent("AGT-1", 2), agent("AGT-2", 3)));
+        when(suggestions.countPendingByRecommendedAgent()).thenReturn(List.of());
+        RoutingService service = new RoutingService(Map.of("rule-based", new RuleBasedStrategy()),
+            agents, suggestions, settings, activity, "rule-based", 2);
+
+        RoutingResult r = service.route(order("ORD-1"), RoutingContext.initial()).orElseThrow();
+
+        assertThat(r.getRecommendedAgentId()).isEqualTo("AGT-1");
+        assertThat(r.getConfidence()).isEqualTo(RoutingService.OVER_CAPACITY_CAP);
+        assertThat(r.getReasoning()).contains("Over capacity: every available agent is at their limit");
+    }
+
+    @Test
+    void queuedSuggestionsCountTowardsCapacity() {
+        when(settings.findById(any())).thenReturn(Optional.empty());
+        when(agents.findByStatus(any())).thenReturn(List.of(agent("AGT-1", 1), agent("AGT-2", 2)));
+        when(suggestions.countPendingByRecommendedAgent()).thenReturn(List.<Object[]>of(new Object[]{"AGT-1", 2L}));
+        RoutingService service = new RoutingService(Map.of("rule-based", new RuleBasedStrategy()),
+            agents, suggestions, settings, activity, "rule-based", 3);
+
+        // AGT-1: 1 active + 2 queued = 3/3, full; AGT-2: 2/3
+        assertThat(service.rank(order("ORD-1"), RoutingContext.initial()))
+            .extracting(RoutingResult::getRecommendedAgentId).containsExactly("AGT-2");
+    }
+
+    @Test
     void enoughCandidatesLeavesConfidenceAlone() {
         when(settings.findById(any())).thenReturn(Optional.empty());
         when(agents.findByStatus(any())).thenReturn(List.of(agent("AGT-1", 0), agent("AGT-2", 1)));

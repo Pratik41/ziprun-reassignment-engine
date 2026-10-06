@@ -35,6 +35,12 @@ public interface OrderRepository extends JpaRepository<Order, String> {
     @Query("select o from Order o where o.id = :id")
     Optional<Order> findByIdForUpdate(@Param("id") String id);
 
+    /** SLA monitor: live orders due before the cutoff that haven't been flagged yet. */
+    @Query("select o from Order o where o.status in :statuses and o.slaDeadline is not null "
+        + "and o.slaDeadline < :cutoff and o.slaAlertedAt is null")
+    List<Order> findUnflaggedDueBefore(@Param("statuses") Collection<OrderStatus> statuses,
+                                       @Param("cutoff") java.time.LocalDateTime cutoff);
+
     /** Orders created with a recommendation on screen (Insights: "recommended pick followed"). */
     long countByFollowedRecommendationIsNotNull();
 

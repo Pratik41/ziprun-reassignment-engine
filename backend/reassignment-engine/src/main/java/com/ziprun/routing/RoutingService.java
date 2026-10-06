@@ -12,6 +12,7 @@ import com.ziprun.routing.strategy.RuleBasedStrategy;
 import com.ziprun.service.activity.ActivityService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * - Safety net: if ANY strategy throws, fall back to rule-based so callers
  *   never get nothing because a strategy had a bug
  * - Confidence guardrail for thin rosters / single candidates (applyRosterLimits)
+ * - Capacity: leave out agents at their limit; flag it when everyone is full (applyCapacityLimits)
  * - Time each routing call (shown in the Insights metrics)
  * - Preview rankings for a new order before it exists (recommendForNewOrder)
  *
@@ -51,6 +53,8 @@ public class RoutingService {
     static final double THIN_ROSTER_CAP = 0.60;
     /** Max confidence when there is only one candidate (nothing to compare against). */
     static final double SINGLE_CANDIDATE_CAP = 0.75;
+    /** Max confidence when every available agent is already at capacity. */
+    static final double OVER_CAPACITY_CAP = 0.40;
 
     private final Map<String, RoutingStrategy> strategies;
     private final AgentRepository agentRepository;
@@ -58,6 +62,7 @@ public class RoutingService {
     private final AppSettingRepository settings;
     private final ActivityService activity;
     private final AtomicReference<String> activeStrategyName;
+    private final int defaultCapacity;
 
     public RoutingService(
             Map<String, RoutingStrategy> strategies,
@@ -65,8 +70,22 @@ public class RoutingService {
             ReassignmentSuggestionRepository suggestionRepository,
             AppSettingRepository settings,
             ActivityService activity,
-            @Value("${routing.strategy:rule-based}") String configuredStrategy
+            String configuredStrategy
     ) {
+        this(strategies, agentRepository, suggestionRepository, settings, activity, configuredStrategy, 0);
+    }
+
+    @Autowired
+    public RoutingService(
+            Map<String, RoutingStrategy> strategies,
+            AgentRepository agentRepository,
+            ReassignmentSuggestionRepository suggestionRepository,
+            AppSettingRepository settings,
+            ActivityService activity,
+            @Value("${routing.strategy:rule-based}") String configuredStrategy,
+            @Value("${agents.default-max-capacity:6}") int defaultCapacity
+    ) {
+        this.defaultCapacity = Math.max(0, defaultCapacity);
         this.strategies = Map.copyOf(strategies);
         this.agentRepository = agentRepository;
         this.suggestionRepository = suggestionRepository;
@@ -107,10 +126,17 @@ public class RoutingService {
      * Full ranked list from the active strategy (best first).
      */
     public List<RoutingResult> rank(Order order, RoutingContext context) {
-        List<Agent> candidates = agentRepository.findByStatus(AgentStatus.AVAILABLE).stream()
+        List<Agent> available = agentRepository.findByStatus(AgentStatus.AVAILABLE).stream()
             .filter(agent -> !agent.getId().equals(order.getAssignedAgentId()))
             .toList();
-        RoutingContext enriched = context.withPendingLoad(pendingLoadByAgent());
+        RoutingContext enriched = context.withPendingLoad(pendingLoadByAgent()).withDefaultCapacity(defaultCapacity);
+
+        // Capacity: agents already at their limit are left out. If everyone is full, all stay
+        // in (an order needs somebody) and applyCapacityLimits flags it loudly.
+        List<Agent> withRoom = available.stream().filter(enriched::hasRoom).toList();
+        boolean everyoneFull = withRoom.isEmpty() && !available.isEmpty();
+        List<Agent> candidates = everyoneFull ? available : withRoom;
+        List<Agent> full = available.stream().filter(a -> !enriched.hasRoom(a)).toList();
 
         String strategyName = activeStrategyName.get();
         RoutingStrategy strategy = strategies.get(strategyName);
@@ -127,7 +153,8 @@ public class RoutingService {
                 .toList();
         }
         long elapsed = System.currentTimeMillis() - started;
-        results = applyRosterLimits(results == null ? List.of() : results, candidates.size(), enriched).stream()
+        results = applyRosterLimits(results == null ? List.of() : results, candidates.size(), enriched);
+        results = applyCapacityLimits(results, everyoneFull, full, enriched).stream()
             .map(r -> r.withRoutingMillis(elapsed))
             .toList();
 
@@ -141,10 +168,12 @@ public class RoutingService {
      * Ranks agents for an order that hasn't been created yet (the "New order" dialog).
      * Same strategies, load snapshot and guardrails as a real routing call; nothing is saved.
      */
-    public List<RoutingResult> recommendForNewOrder(String description, int limit) {
+    public List<RoutingResult> recommendForNewOrder(String description, String pickupZone, String dropoffZone, int limit) {
         Order draft = new Order();
         draft.setId("NEW-ORDER");
         draft.setDescription(description == null || description.isBlank() ? "(no description yet)" : description.trim());
+        draft.setPickupZone(Zones.isKnown(pickupZone) ? pickupZone : null);
+        draft.setDropoffZone(Zones.isKnown(dropoffZone) ? dropoffZone : null);
         return rank(draft, RoutingContext.initial()).stream().limit(limit).toList();
     }
 
@@ -196,6 +225,45 @@ public class RoutingService {
             return results.stream().map(r -> r.capped(SINGLE_CANDIDATE_CAP, "")).toList();
         }
         return results;
+    }
+
+    /**
+     * Capacity guardrail. Full agents were already left out of the candidates; this
+     * says so in the reasoning, and when *everyone* is full (so the suggestion would
+     * overload someone) caps confidence at 0.40 and tells ops to add capacity.
+     */
+    private List<RoutingResult> applyCapacityLimits(List<RoutingResult> results, boolean everyoneFull,
+                                                    List<Agent> full, RoutingContext context) {
+        if (results.isEmpty() || full.isEmpty()) {
+            return results;
+        }
+        String fullList = full.stream()
+            .map(a -> a.getName() + " " + context.loadOfCapacity(a))
+            .collect(java.util.stream.Collectors.joining(", "));
+        if (everyoneFull) {
+            String note = " Over capacity: every available agent is at their limit (" + fullList
+                + "); this would overload them. Make more agents available or raise a capacity.";
+            return results.stream().map(r -> r.capped(OVER_CAPACITY_CAP, note)).toList();
+        }
+        String note = " Skipped (at capacity): " + fullList + ".";
+        return results.stream().map(r -> r.capped(1.0, note)).toList();
+    }
+
+    public int getDefaultCapacity() {
+        return defaultCapacity;
+    }
+
+    /** Active orders plus PENDING suggestions recommending them (the load routing ranks on). */
+    public int effectiveLoadOf(String agentId) {
+        Agent agent = agentRepository.findById(agentId).orElse(null);
+        if (agent == null) {
+            return Integer.MAX_VALUE;
+        }
+        return RoutingContext.initial().withPendingLoad(pendingLoadByAgent()).effectiveLoad(agent);
+    }
+
+    public String agentName(String agentId) {
+        return agentRepository.findById(agentId).map(Agent::getName).orElse(agentId);
     }
 
     private Map<String, Integer> pendingLoadByAgent() {

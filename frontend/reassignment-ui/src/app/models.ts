@@ -3,7 +3,7 @@
 export type AgentStatus = 'AVAILABLE' | 'BUSY' | 'OFFLINE';
 export type OrderStatus = 'ASSIGNED' | 'REASSIGNMENT_PENDING' | 'REASSIGNED' | 'DELIVERED';
 export type SuggestionStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'EXPIRED';
-export type TriggerReason = 'INITIAL' | 'AGENT_OFFLINE';
+export type TriggerReason = 'INITIAL' | 'AGENT_OFFLINE' | 'SLA_RISK';
 
 export interface Agent {
   id: string;
@@ -30,6 +30,33 @@ export interface Order {
   /** Top pick the recommendation engine showed when the order was created (null if none). */
   recommendedAgentId: string | null;
   followedRecommendation: boolean | null;
+  /** When the SLA monitor flagged it as likely to miss slaDeadline. */
+  slaAlertedAt: string | null;
+}
+
+export interface Zone {
+  id: string;
+  name: string;
+  neighbours: string[];
+}
+
+/** GET /config */
+export interface AppConfig {
+  /** 0 = no limit */
+  defaultMaxCapacity: number;
+  defaultSlaMinutes: number;
+  slaAtRiskMinutes: number;
+  zones: Zone[];
+}
+
+export interface NewOrderRequest {
+  description: string;
+  assignedAgentId: string;
+  recommendedAgentId: string | null;
+  pickupZone: string | null;
+  dropoffZone: string | null;
+  /** null = default deadline, 0 = none */
+  slaMinutes: number | null;
 }
 
 export interface Suggestion {

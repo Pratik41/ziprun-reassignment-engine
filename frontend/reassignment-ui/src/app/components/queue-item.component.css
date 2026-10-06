@@ -2,6 +2,7 @@
 .item-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 14px 18px; }
 .order-id { font-weight: 600; font-size: 13.5px; }
 .order-desc { margin-top: 2px; font-size: 15px; font-weight: 550; letter-spacing: -0.01em; }
+.route { display: flex; align-items: center; gap: 5px; margin-top: 3px; font-size: 12.5px; }
 .was-with { display: flex; align-items: center; gap: 6px; font-size: 12.5px; flex-wrap: wrap; justify-content: flex-end; }
 .was-name { font-weight: 500; }
 .back { margin: 0 18px 12px; }

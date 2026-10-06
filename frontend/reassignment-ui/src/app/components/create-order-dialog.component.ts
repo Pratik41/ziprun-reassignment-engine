@@ -10,6 +10,17 @@ import { ToastService } from '../services/toast.service';
 import { AvatarComponent } from '../ui/avatar.component';
 import { IconComponent } from '../ui/icon.component';
 
+interface RecommendQuery {
+  text: string;
+  pickup: string;
+  dropoff: string;
+  force: boolean;
+}
+
+function duration(minutes: number): string {
+  return minutes < 60 ? `${minutes} min` : `${minutes / 60} hour${minutes === 60 ? '' : 's'}`;
+}
+
 /**
  * "New order" modal. The active routing strategy (AI or rule-based) recommends
  * the best Available agents by effective load, refreshed as the description is
@@ -36,6 +47,29 @@ import { IconComponent } from '../ui/icon.component';
             <label for="desc">Description</label>
             <input id="desc" name="desc" class="input" [ngModel]="description()" (ngModelChange)="onDescription($event)"
                    required autofocus placeholder="e.g. Groceries - Koramangala to HSR Layout" />
+          </div>
+
+          <div class="grid3">
+            <div class="field">
+              <label for="pickup">Pickup zone</label>
+              <select id="pickup" name="pickup" class="select" [ngModel]="pickupZone()" (ngModelChange)="onZone('pickup', $event)">
+                <option value="">Not set</option>
+                @for (z of zones(); track z.id) { <option [value]="z.id">{{ z.name }}</option> }
+              </select>
+            </div>
+            <div class="field">
+              <label for="dropoff">Drop-off zone</label>
+              <select id="dropoff" name="dropoff" class="select" [ngModel]="dropoffZone()" (ngModelChange)="onZone('dropoff', $event)">
+                <option value="">Not set</option>
+                @for (z of zones(); track z.id) { <option [value]="z.id">{{ z.name }}</option> }
+              </select>
+            </div>
+            <div class="field">
+              <label for="sla">Deliver within</label>
+              <select id="sla" name="sla" class="select" [ngModel]="slaMinutes()" (ngModelChange)="slaMinutes.set(+$event)">
+                @for (s of slaOptions(); track s.minutes) { <option [value]="s.minutes">{{ s.label }}</option> }
+              </select>
+            </div>
           </div>
 
           <div class="field">
@@ -82,7 +116,7 @@ import { IconComponent } from '../ui/icon.component';
             <label for="agent">Or choose any Available agent</label>
             <select id="agent" name="agent" class="select" [ngModel]="agentId()" (ngModelChange)="pick($event)" required>
               @for (a of store.availableAgents(); track a.id) {
-                <option [value]="a.id">{{ a.name }} · {{ a.activeOrderCount }} active orders{{ a.id === topPick() ? ' · recommended' : '' }}</option>
+                <option [value]="a.id">{{ a.name }} · {{ store.loadOfCapacity(a) }} orders{{ store.isFull(a) ? ' · full' : '' }}{{ a.id === topPick() ? ' · recommended' : '' }}</option>
               }
             </select>
             <span class="hint">Busy and Offline agents aren't taking new orders.</span>
@@ -110,6 +144,8 @@ import { IconComponent } from '../ui/icon.component';
       width: min(540px, calc(100vw - 24px)); max-height: 86vh; overflow-y: auto; box-shadow: var(--shadow-lg);
     }
     .form { display: flex; flex-direction: column; gap: 16px; }
+    .grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+    @media (max-width: 520px) { .grid3 { grid-template-columns: 1fr 1fr; } .grid3 .field:last-child { grid-column: 1 / -1; } }
     .foot { padding-top: 4px; flex-wrap: wrap; gap: 8px; }
     .override { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 
@@ -162,10 +198,13 @@ export class CreateOrderDialogComponent {
     this.isOpen = value;
     if (opening) {
       this.description.set('');
+      this.pickupZone.set('');
+      this.dropoffZone.set('');
+      this.slaMinutes.set(this.store.config()?.defaultSlaMinutes ?? 120);
       this.agentId.set(this.store.availableAgents()[0]?.id ?? '');
       this.userPicked = false;
       this.options.set([]);
-      this.requests.next({ text: '', force: true });
+      this.ask(true);
     }
   }
   get open(): boolean {
@@ -173,7 +212,20 @@ export class CreateOrderDialogComponent {
   }
 
   readonly description = signal('');
+  readonly pickupZone = signal('');
+  readonly dropoffZone = signal('');
+  /** 0 = no deadline */
+  readonly slaMinutes = signal(120);
   readonly agentId = signal('');
+
+  readonly zones = computed(() => this.store.config()?.zones ?? []);
+  readonly slaOptions = computed(() => {
+    const fallback = this.store.config()?.defaultSlaMinutes ?? 120;
+    const choices = [30, 60, 120, 240, 480];
+    if (!choices.includes(fallback)) choices.push(fallback);
+    return [...choices.sort((a, b) => a - b).map(m => ({ minutes: m, label: duration(m) + (m === fallback ? ' (default)' : '') })),
+      { minutes: 0, label: 'No deadline' }];
+  });
   readonly saving = signal(false);
 
   readonly options = signal<Recommendation[]>([]);
@@ -191,17 +243,18 @@ export class CreateOrderDialogComponent {
 
   /** True once ops picks an agent themselves: new recommendations then stop moving their choice. */
   private userPicked = false;
-  private readonly requests = new Subject<{ text: string; force: boolean }>();
+  private readonly requests = new Subject<RecommendQuery>();
 
   constructor() {
     this.requests.pipe(
-      // opening asks straight away; typing waits for a pause
+      // opening or picking a zone asks straight away; typing waits for a pause
       switchMap(req => req.force ? of(req) : of(req).pipe(debounceTime(CreateOrderDialogComponent.DEBOUNCE_MS))),
-      map(req => ({ text: req.text.trim(), force: req.force })),
-      distinctUntilChanged((prev, next) => !next.force && prev.text === next.text),
+      map(req => ({ ...req, text: req.text.trim() })),
+      distinctUntilChanged((prev, next) => !next.force && prev.text === next.text
+        && prev.pickup === next.pickup && prev.dropoff === next.dropoff),
       tap(() => { this.loading.set(true); this.error.set(null); }),
-      // switchMap cancels a slower in-flight request when the description changes again
-      switchMap(({ text }) => this.api.recommendAgents(text).pipe(
+      // switchMap cancels a slower in-flight request when the inputs change again
+      switchMap(({ text, pickup, dropoff }) => this.api.recommendAgents(text, pickup || null, dropoff || null).pipe(
         map(res => ({ options: res.options, error: null as string | null })),
         catchError(err => of({ options: [] as Recommendation[], error: errorMessage(err) })),
       )),
@@ -218,7 +271,16 @@ export class CreateOrderDialogComponent {
 
   onDescription(text: string): void {
     this.description.set(text);
-    this.requests.next({ text, force: false });
+    this.ask(false);
+  }
+
+  onZone(which: 'pickup' | 'dropoff', zone: string): void {
+    (which === 'pickup' ? this.pickupZone : this.dropoffZone).set(zone);
+    this.ask(false, true);
+  }
+
+  private ask(force: boolean, immediate = force): void {
+    this.requests.next({ text: this.description(), pickup: this.pickupZone(), dropoff: this.dropoffZone(), force: immediate });
   }
 
   pick(agentId: string): void {
@@ -227,9 +289,15 @@ export class CreateOrderDialogComponent {
   }
 
   loadText(agentId: string): string {
-    const active = this.store.agentById().get(agentId)?.activeOrderCount ?? 0;
+    const agent = this.store.agentById().get(agentId);
+    if (!agent) {
+      return '';
+    }
     const pending = this.store.pendingByAgent().get(agentId) ?? 0;
-    return `${active} active order${active === 1 ? '' : 's'}` + (pending ? ` · ${pending} more queued` : '');
+    const capacity = this.store.capacityOf(agent);
+    const zone = this.store.zoneName(agent.currentZone);
+    return `${agent.activeOrderCount} active` + (pending ? ` + ${pending} queued` : '')
+      + (capacity ? ` · ${this.store.loadOfCapacity(agent)} of capacity` : '') + (zone ? ` · ${zone}` : '');
   }
 
   close(): void {
@@ -243,7 +311,14 @@ export class CreateOrderDialogComponent {
       return;
     }
     this.saving.set(true);
-    this.api.createOrder(description, agentId, this.topPick()).subscribe({
+    this.api.createOrder({
+      description,
+      assignedAgentId: agentId,
+      recommendedAgentId: this.topPick(),
+      pickupZone: this.pickupZone() || null,
+      dropoffZone: this.dropoffZone() || null,
+      slaMinutes: this.slaMinutes(),
+    }).subscribe({
       next: order => {
         this.saving.set(false);
         const followed = order.followedRecommendation;

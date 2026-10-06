@@ -25,8 +25,8 @@ interface Kpi {
         <div>
           <h1 class="page-title">Reassignment queue</h1>
           <p class="page-sub">
-            Orders whose agent can't deliver them. Suggestions appear here automatically when an agent's status
-            changes. Nothing moves until you accept.
+            Orders whose agent can't deliver them, or that are about to miss their deadline. Suggestions appear here
+            automatically. Nothing moves until you accept.
           </p>
         </div>
         <button class="btn btn-secondary btn-sm" (click)="store.refresh()">
@@ -58,17 +58,28 @@ interface Kpi {
                 <div class="skeleton" style="height: 56px; margin-top: 16px"></div></div>
             }
           } @else {
+            @if (store.atRiskOrders().length) {
+              <div class="section-label"><app-icon name="clock" [size]="14" />Deadline at risk · {{ store.atRiskOrders().length }}</div>
+              @for (o of store.atRiskOrders(); track o.id) {
+                <app-queue-item [order]="o" />
+              }
+              @if (store.waitingOrders().length) {
+                <div class="section-label"><app-icon name="package" [size]="14" />Needs a new agent · {{ store.waitingOrders().length }}</div>
+              }
+            }
             @for (o of store.waitingOrders(); track o.id) {
               <app-queue-item [order]="o" />
             } @empty {
-              <div class="card">
-                <div class="empty">
-                  <span class="empty-icon"><app-icon name="inbox" [size]="22" /></span>
-                  <h3>All clear</h3>
-                  <p>No orders need a new agent. Set an agent to <strong>Offline</strong> in the fleet panel to watch the
-                    re-planning loop queue suggestions here.</p>
+              @if (!store.atRiskOrders().length) {
+                <div class="card">
+                  <div class="empty">
+                    <span class="empty-icon"><app-icon name="inbox" [size]="22" /></span>
+                    <h3>All clear</h3>
+                    <p>No orders need a new agent. Set an agent to <strong>Offline</strong> in the fleet panel to watch the
+                      re-planning loop queue suggestions here.</p>
+                  </div>
                 </div>
-              </div>
+              }
             }
           }
         </section>
@@ -82,6 +93,8 @@ interface Kpi {
                 <li><strong>Offline</strong> agent: their orders land here with a suggested replacement.</li>
                 <li><strong>Busy</strong> agent: keeps their orders, stops being suggested.</li>
                 <li><strong>Available</strong> again: waiting orders are re-balanced across the fleet.</li>
+                <li><strong>Close to its deadline</strong>: if another agent could start it sooner, it's suggested here.</li>
+                <li>Agents at their <strong>capacity</strong> aren't suggested; nearby agents are preferred.</li>
               </ul>
             </div>
           </section>
@@ -100,6 +113,7 @@ interface Kpi {
     .queue { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
     .side { display: flex; flex-direction: column; gap: 14px; position: sticky; top: 20px; }
     .skeleton-card { padding: 18px; }
+    .section-label { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-2); }
     .how-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
     .how ul { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
     @media (max-width: 1180px) { .layout { grid-template-columns: minmax(0, 1fr); } .side { position: static; } }
@@ -115,7 +129,8 @@ export class QueuePage {
     const withSuggestion = waiting.filter(o => this.store.openSuggestionsByOrder().has(o.id)).length;
     const counts = this.store.agentCounts();
     const pending = this.store.pendingSuggestions();
-    const auto = pending.filter(s => s.triggerReason === 'AGENT_OFFLINE').length;
+    const auto = pending.filter(s => s.triggerReason !== 'INITIAL').length;
+    const atRisk = this.store.atRiskOrders().length;
     const ai = pending.filter(s => s.source?.startsWith('ai:')).length;
     const fallbacks = pending.filter(s => s.source?.includes('fallback')).length;
     const avgConfidence = pending.length ? pending.reduce((sum, s) => sum + s.confidence, 0) / pending.length : 0;
@@ -123,7 +138,8 @@ export class QueuePage {
     return [
       {
         label: 'Waiting orders', value: `${waiting.length}`, icon: 'package', tone: waiting.length ? 'warning' : 'success',
-        detail: waiting.length ? `${withSuggestion} with a suggestion` : 'Nothing stranded',
+        detail: (waiting.length ? `${withSuggestion} with a suggestion` : 'Nothing stranded')
+          + (atRisk ? ` · ${atRisk} deadline${atRisk === 1 ? '' : 's'} at risk` : ''),
       },
       {
         label: 'Available agents', value: `${counts.AVAILABLE} / ${this.store.agents().length}`, icon: 'users', tone: 'success',

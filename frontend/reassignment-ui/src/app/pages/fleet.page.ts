@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject } from '@angular/core';
 import { Agent, Order } from '../models';
 import { AGENT_STATUS, ORDER_STATUS, timeAgo } from '../labels';
+import { ApiService, errorMessage } from '../services/api.service';
 import { HeartbeatSimulatorService } from '../services/heartbeat-simulator.service';
 import { StoreService } from '../services/store.service';
 import { ToastService } from '../services/toast.service';
@@ -8,7 +9,7 @@ import { AgentStatusControlComponent } from '../ui/agent-status-control.componen
 import { AvatarComponent } from '../ui/avatar.component';
 import { IconComponent } from '../ui/icon.component';
 
-/** Every agent with status control, load, and the orders they're carrying. */
+/** Every agent with status control, load vs capacity, zone, and the orders they're carrying. */
 @Component({
   selector: 'app-fleet-page',
   standalone: true,
@@ -19,8 +20,8 @@ import { IconComponent } from '../ui/icon.component';
       <div class="page-header">
         <div>
           <h1 class="page-title">Fleet</h1>
-          <p class="page-sub">Who's on shift, what they're carrying, and their status. Changing a status re-plans
-            affected orders in the background.</p>
+          <p class="page-sub">Who's on shift, where they are, what they're carrying, and their status. Changing a status
+            re-plans affected orders in the background. Agents at capacity aren't suggested for more orders.</p>
         </div>
         <div class="row">
           @for (s of summary(); track s.label) {
@@ -44,7 +45,29 @@ import { IconComponent } from '../ui/icon.component';
             <div class="stats">
               <div><div class="stat-value">{{ a.activeOrderCount }}</div><div class="stat-label">active orders</div></div>
               <div><div class="stat-value">{{ store.pendingByAgent().get(a.id) ?? 0 }}</div><div class="stat-label">suggested to them</div></div>
-              <div><div class="stat-value">{{ effective(a.id, a.activeOrderCount) }}</div><div class="stat-label">effective load</div></div>
+              <div>
+                <div class="stat-value" [class.full]="store.isFull(a)">{{ store.loadOfCapacity(a) }}</div>
+                <div class="stat-label">{{ store.capacityOf(a) ? (store.isFull(a) ? 'load · full' : 'load / capacity') : 'effective load' }}</div>
+              </div>
+            </div>
+
+            <div class="details">
+              <label class="detail">
+                <span class="detail-label"><app-icon name="truck" [size]="13" />Zone</span>
+                <select class="select select-sm" [value]="a.currentZone ?? ''" (change)="saveZone(a, $any($event.target).value)"
+                        [attr.aria-label]="'Zone of ' + a.name">
+                  <option value="">Unknown</option>
+                  @for (z of store.config()?.zones ?? []; track z.id) {
+                    <option [value]="z.id">{{ z.name }}</option>
+                  }
+                </select>
+              </label>
+              <label class="detail">
+                <span class="detail-label"><app-icon name="package" [size]="13" />Capacity</span>
+                <input class="input input-sm" type="number" min="1" max="50" [value]="a.maxCapacity ?? ''"
+                       [placeholder]="'Default ' + (store.config()?.defaultMaxCapacity || 'none')"
+                       (change)="saveCapacity(a, $any($event.target).value)" [attr.aria-label]="'Capacity of ' + a.name" />
+              </label>
             </div>
 
             <div class="orders">
@@ -95,6 +118,11 @@ import { IconComponent } from '../ui/icon.component';
     .stats { display: grid; grid-template-columns: repeat(3, 1fr); padding: 0 18px 12px; gap: 8px; }
     .stat-value { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
     .stat-label { font-size: 11.5px; color: var(--text-3); }
+    .stat-value.full { color: var(--danger-text); }
+    .details { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 0 18px 14px; }
+    .detail { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+    .detail-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--text-3); }
+    .select-sm, .input-sm { height: 32px; font-size: 13px; }
     .orders { flex: 1; border-top: 1px solid var(--border); padding: 8px 10px; display: flex; flex-direction: column; gap: 2px; }
     .order { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); font-size: 13px; }
     .order:hover { background: var(--surface-hover); }
@@ -110,6 +138,7 @@ import { IconComponent } from '../ui/icon.component';
 })
 export class FleetPage {
   readonly store = inject(StoreService);
+  private readonly api = inject(ApiService);
   readonly sim = inject(HeartbeatSimulatorService);
   private readonly toast = inject(ToastService);
   readonly statusLabels = AGENT_STATUS;
@@ -144,8 +173,31 @@ export class FleetPage {
     return this.activeOrdersByAgent().get(agentId) ?? [];
   }
 
-  effective(agentId: string, active: number): number {
-    return active + (this.store.pendingByAgent().get(agentId) ?? 0);
+  saveZone(a: Agent, zone: string): void {
+    this.save(a, zone || null, a.maxCapacity, `${a.name} is in ${this.store.zoneName(zone) ?? 'an unknown zone'}`);
+  }
+
+  saveCapacity(a: Agent, raw: string): void {
+    const capacity = raw === '' ? null : Math.round(Number(raw));
+    if (capacity !== null && (!Number.isFinite(capacity) || capacity < 1 || capacity > 50)) {
+      this.toast.error('Capacity must be between 1 and 50', 'Leave it empty to use the fleet default.');
+      return;
+    }
+    this.save(a, a.currentZone, capacity,
+      capacity === null ? `${a.name} uses the fleet default capacity` : `${a.name} can carry up to ${capacity} orders`);
+  }
+
+  private save(a: Agent, zone: string | null, capacity: number | null, message: string): void {
+    this.api.updateAgent(a.id, zone, capacity).subscribe({
+      next: () => {
+        this.toast.success(message);
+        this.store.refresh();
+      },
+      error: err => {
+        this.toast.error(`Couldn't update ${a.name}`, errorMessage(err));
+        this.store.refresh();
+      },
+    });
   }
 
   appStatus(a: Agent): string {

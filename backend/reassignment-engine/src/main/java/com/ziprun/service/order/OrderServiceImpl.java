@@ -8,7 +8,11 @@ import com.ziprun.domain.OrderStatus;
 import com.ziprun.exception.InvalidStateException;
 import com.ziprun.exception.NotFoundException;
 import com.ziprun.repository.AgentRepository;
+import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.repository.OrderRepository;
+import com.ziprun.repository.ReassignmentSuggestionRepository;
+import com.ziprun.routing.Zones;
+import org.springframework.beans.factory.annotation.Value;
 import com.ziprun.service.activity.ActivityService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -37,17 +41,32 @@ public class OrderServiceImpl implements OrderService {
 
     private final OrderRepository orderRepository;
     private final AgentRepository agentRepository;
+    private final ReassignmentSuggestionRepository suggestionRepository;
     private final ActivityService activity;
+    private final int defaultSlaMinutes;
 
-    public OrderServiceImpl(OrderRepository orderRepository, AgentRepository agentRepository, ActivityService activity) {
+    public OrderServiceImpl(OrderRepository orderRepository, AgentRepository agentRepository,
+                            ReassignmentSuggestionRepository suggestionRepository, ActivityService activity,
+                            @Value("${orders.default-sla-minutes:120}") int defaultSlaMinutes) {
         this.orderRepository = orderRepository;
         this.agentRepository = agentRepository;
+        this.suggestionRepository = suggestionRepository;
         this.activity = activity;
+        this.defaultSlaMinutes = defaultSlaMinutes;
     }
 
     @Override
-    public Order createOrder(String description, String assignedAgentId, String recommendedAgentId) {
+    public Order createOrder(NewOrder spec) {
+        String description = spec.description();
+        String assignedAgentId = spec.assignedAgentId();
+        String recommendedAgentId = spec.recommendedAgentId();
         log.debug("Creating order: description={}, agent={}", description, assignedAgentId);
+        String pickupZone = zoneOrNull(spec.pickupZone(), "pickupZone");
+        String dropoffZone = zoneOrNull(spec.dropoffZone(), "dropoffZone");
+        int slaMinutes = spec.slaMinutes() == null ? defaultSlaMinutes : spec.slaMinutes();
+        if (slaMinutes < 0) {
+            throw new IllegalArgumentException("slaMinutes must be 0 (no deadline) or more");
+        }
 
         Agent agent = getAgent(assignedAgentId);
         if (agent.getStatus() != AgentStatus.AVAILABLE) {
@@ -61,6 +80,11 @@ public class OrderServiceImpl implements OrderService {
         order.setAssignedAgentId(assignedAgentId);
         order.setStatus(OrderStatus.ASSIGNED);
         order.setCreatedAt(LocalDateTime.now());
+        order.setPickupZone(pickupZone);
+        order.setDropoffZone(dropoffZone);
+        if (slaMinutes > 0) {
+            order.setSlaDeadline(order.getCreatedAt().plusMinutes(slaMinutes));
+        }
         if (recommendedAgentId != null && !recommendedAgentId.isBlank()) {
             order.setRecommendedAgentId(recommendedAgentId);
             order.setFollowedRecommendation(recommendedAgentId.equals(assignedAgentId));
@@ -76,6 +100,28 @@ public class OrderServiceImpl implements OrderService {
                 recommendationNote(saved), description),
             saved.getId(), assignedAgentId, null);
         return saved;
+    }
+
+    private static String zoneOrNull(String zone, String field) {
+        if (zone == null || zone.isBlank()) {
+            return null;
+        }
+        if (!Zones.isKnown(zone)) {
+            throw new IllegalArgumentException("Unknown " + field + " '" + zone + "'. See GET /config for the list");
+        }
+        return zone;
+    }
+
+    @Override
+    public Optional<Order> claimSlaAlert(String orderId) {
+        // Row lock: two monitor runs (or instances) can't both alert the same order
+        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
+        if (order == null || order.getSlaAlertedAt() != null
+            || (order.getStatus() != OrderStatus.ASSIGNED && order.getStatus() != OrderStatus.REASSIGNED)) {
+            return Optional.empty();
+        }
+        order.setSlaAlertedAt(LocalDateTime.now());
+        return Optional.of(order);
     }
 
     private String recommendationNote(Order order) {
@@ -137,6 +183,12 @@ public class OrderServiceImpl implements OrderService {
         if (newStatus == OrderStatus.DELIVERED) {
             Agent agent = getAgent(order.getAssignedAgentId());
             agent.releaseOrder();
+            // Nothing left to decide: withdraw any open suggestion for it (e.g. an SLA one)
+            LocalDateTime now = LocalDateTime.now();
+            suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING).forEach(s -> {
+                s.setStatus(SuggestionStatus.EXPIRED);
+                s.setDecidedAt(now);
+            });
             activity.record(Activity.Type.ORDER_DELIVERED, Activity.Actor.OPS,
                 String.format("%s delivered by %s", orderId, agent.getName()), orderId, agent.getId(), null);
         }
