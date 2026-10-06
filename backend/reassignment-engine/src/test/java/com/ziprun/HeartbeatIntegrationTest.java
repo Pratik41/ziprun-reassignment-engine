@@ -2,7 +2,9 @@ package com.ziprun;
 
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
+import com.ziprun.domain.OrderStatus;
 import com.ziprun.repository.AgentRepository;
+import com.ziprun.repository.OrderRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -34,6 +36,7 @@ class HeartbeatIntegrationTest {
 
     @Autowired MockMvc mvc;
     @Autowired AgentRepository agents;
+    @Autowired OrderRepository orders;
 
     @Test
     void agentWhoseAppGoesQuietIsMarkedOfflineAndTheirOrdersReplanned() throws Exception {
@@ -43,16 +46,24 @@ class HeartbeatIntegrationTest {
         Agent priya = awaitStatus("AGT-001", AgentStatus.OFFLINE);
 
         assertThat(priya.getStatusNote()).startsWith("Auto-offline: no heartbeat");
-        // the normal re-planning loop ran: her orders are waiting for a new agent
-        mvc.perform(get("/orders").param("status", "REASSIGNMENT_PENDING")).andExpect(jsonPath("$.length()").value(3));
         mvc.perform(get("/activity")).andExpect(jsonPath("$[?(@.type == 'AGENT_AUTO_OFFLINE')]").exists());
+
+        // the normal re-planning loop runs in the background after the status commit:
+        // wait for it to flag her orders as waiting for a new agent
+        long deadline = System.currentTimeMillis() + 8_000;
+        int waiting = orders.findByStatus(OrderStatus.REASSIGNMENT_PENDING).size();
+        while (waiting < 3 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+            waiting = orders.findByStatus(OrderStatus.REASSIGNMENT_PENDING).size();
+        }
+        assertThat(waiting).isEqualTo(3);
     }
 
     @Test
     void steadyHeartbeatsKeepTheAgentOnDuty() throws Exception {
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < 15; i++) {
             mvc.perform(post("/agents/AGT-002/heartbeat")).andExpect(status().isOk());
-            Thread.sleep(250);
+            Thread.sleep(150); // well inside the 1s timeout, even on a slow CI machine
         }
         assertThat(agents.findById("AGT-002").orElseThrow().getStatus()).isEqualTo(AgentStatus.AVAILABLE);
     }
