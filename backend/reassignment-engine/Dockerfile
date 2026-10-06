@@ -11,7 +11,7 @@ RUN mvn -q -B -DskipTests package
 FROM eclipse-temurin:17-jre
 WORKDIR /app
 COPY --from=build /app/target/reassignment-engine-1.0-SNAPSHOT.jar app.jar
-# H2 database file lives here (mounted as a volume by docker-compose)
+# docker-compose points DATABASE_URL at PostgreSQL; run standalone, the H2 file goes in /app/data
 VOLUME /app/data
 EXPOSE 8080
 ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -42,6 +42,33 @@ jobs:
           name: surefire-reports
           path: backend/reassignment-engine/target/surefire-reports/
 
+  backend-postgres:
+    name: Backend on PostgreSQL (migrations + main flow)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: ziprun
+          POSTGRES_USER: ziprun
+          POSTGRES_PASSWORD: ziprun
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U ziprun -d ziprun" --health-interval 3s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend/reassignment-engine
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - run: mvn -B test -Dtest=PostgresIntegrationTest -Dsurefire.failIfNoSpecifiedTests=false
+        env:
+          POSTGRES_TEST_URL: jdbc:postgresql://localhost:5432/ziprun
+
   docker:
     name: Docker Compose (build + smoke test)
     runs-on: ubuntu-latest

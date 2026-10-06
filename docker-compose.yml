@@ -1,21 +1,40 @@
 # One-command startup:  docker compose up --build
 #   UI       -> http://localhost:4200
 #   Backend  -> http://localhost:8080
-# Optional API keys go in a .env file next to this one (see .env.example).
-# Without keys, suggestions use the rule-based strategy and are labelled that way.
+# Settings go in a .env file next to this one (see .env.example).
+# Without API keys, suggestions use the rule-based strategy and are labelled that way.
 
 services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ziprun
+      POSTGRES_USER: ziprun
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-ziprun}
+    volumes:
+      - ziprun-pg:/var/lib/postgresql/data   # survives container restarts; `docker compose down -v` resets it
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ziprun -d ziprun"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   backend:
     build: ./backend/reassignment-engine
     ports:
       - "8080:8080"
     environment:
+      DATABASE_URL: jdbc:postgresql://db:5432/ziprun
+      DATABASE_USERNAME: ziprun
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-ziprun}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       ROUTING_STRATEGY: ${ROUTING_STRATEGY:-ai}
       AGENTS_HEARTBEAT_TIMEOUT_SECONDS: ${AGENTS_HEARTBEAT_TIMEOUT_SECONDS:-60}
-    volumes:
-      - ziprun-data:/app/data   # H2 database survives container restarts
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -27,4 +46,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  ziprun-data:
+  ziprun-pg:
