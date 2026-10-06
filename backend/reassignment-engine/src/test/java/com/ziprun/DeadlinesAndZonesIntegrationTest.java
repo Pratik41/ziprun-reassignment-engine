@@ -148,6 +148,24 @@ class DeadlinesAndZonesIntegrationTest {
             .andExpect(status().isBadRequest());
     }
 
+    /** The worked example in docs/HOW_IT_WORKS.md, section 5. */
+    @Test
+    void sampleRecoveryIsSpreadByLoadAndDistance() throws Exception {
+        mvc.perform(patch("/agents/AGT-001/status").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"status\":\"OFFLINE\"}")).andExpect(status().isOk());
+
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (suggestions.findByStatus(SuggestionStatus.PENDING).size() < 3 && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+        }
+        assertThat(suggestions.findByStatus(SuggestionStatus.PENDING))
+            .extracting(s -> s.getOrderId() + "->" + s.getRecommendedAgentId() + "@" + s.getConfidence())
+            .containsExactlyInAnyOrder("ORD-001->AGT-002@0.6", "ORD-002->AGT-002@0.6", "ORD-008->AGT-004@0.6");
+        assertThat(suggestions.findByOrderId("ORD-008").get(0).getReasoning())
+            .contains("Kiran Nair has 0 active orders (0/6 of capacity), in Malleshwaram, away from Peenya",
+                "Thin roster: 3 stranded order(s) but only 2 available agent(s)");
+    }
+
     @Test
     void configListsZonesAndDefaults() throws Exception {
         mvc.perform(get("/config"))

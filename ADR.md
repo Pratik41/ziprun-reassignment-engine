@@ -153,10 +153,12 @@ Partly in place: `RoutingContext.pendingLoad` makes each routing call aware of s
 
 1. **Auto-assigning high-confidence suggestions.** Excluded on purpose (see ADR-9). The checkpoint is a requirement, not a missing feature.
 2. **SSE streaming was built last, on purpose.** I only added `POST /orders/{id}/suggest/stream` after the loop's correctness work was done. It's an *add-on* to the same path, not a second one: the endpoint attaches a `ReasoningListener` to the `RoutingContext`; the AI strategy streams from the provider (Gemini `streamGenerateContent?alt=sse`, OpenAI-style `stream:true`) and `ReasoningExtractor` forwards only the `reasoning` text, decoded incrementally from the JSON. The full reply is still parsed and validated after the stream ends. If a provider fails mid-stream or validation fails, the client gets a `restart` event and the stream still ends with the persisted (possibly rule-based) suggestion. Streaming is only on the on-demand path; async re-plans have no one watching.
-3. **Full dispatch board / SLA countdown / zone map.** The "orders by agent" view covers agent load; a board with SLA colours needs SLA data that doesn't exist yet.
-4. **Auth on the API.** Not built yet; noted because `PUT /routing/strategy` is an operational lever that would need it in production.
+3. **Full dispatch board / zone map.** Still excluded. Deadlines now exist (ADR-12) and show as countdown badges, but a map needs coordinates, not zones.
+4. **Auth on the API.** *Since built:* see ADR-14.
 5. **Durable event delivery** (broker / outbox), covered in ADR-4.
-6. **Schema migrations (Flyway).** The schema comes from `ddl-auto=update`, which only *adds* tables and columns. On H2, Hibernate maps `@Enumerated(STRING)` to native `ENUM` columns, so adding an enum value (as happened with `SuggestionStatus.EXPIRED`, and will happen with a future `TriggerReason.SLA_RISK`) needs a manual `ALTER` on any existing database; fresh databases are fine. Nullable placeholder columns are additive, so they're safe. Flyway with versioned migrations is the next infrastructure task, before moving to Postgres.
+6. **Schema migrations (Flyway).** *Since built:* see ADR-15. (Before it, the schema came from `ddl-auto=update`, and adding an enum value like `SuggestionStatus.EXPIRED` needed a manual `ALTER` on existing H2 databases.)
+
+*Update:* the zone and capacity seams were used, but not exactly as sketched above: see ADR-11 for why zones became part of the rule-based score instead of a separate strategy. The SLA loop followed this plan closely (ADR-12).
 
 ---
 
@@ -174,7 +176,7 @@ Angular 17 with standalone components (`frontend/reassignment-ui`). DI and servi
 
 **Tradeoffs accepted**  
 - Heavier bundle and more boilerplate than React for a small UI.
-- Polling rather than push: up to 3s delay and constant small requests. SSE/WebSocket push for the whole board is on the roadmap.
+- Polling rather than push: up to 3s delay and constant small requests. *Since replaced by push (ADR-13); polling remains only as the fallback while the live stream is down.*
 
 ---
 
@@ -245,7 +247,7 @@ Option 2. The loop only ever creates PENDING suggestions; nothing in `ReplanEven
 - **REJECTED:** the order stays REASSIGNMENT_PENDING; the UI offers "Get Suggestion" or manual reassign.
 - **Original agent is back:** if the order's own agent is AVAILABLE again before ops decides (BUSY doesn't count: they aren't taking orders), the UI offers "Keep with <agent>" (`POST /orders/{id}/keep`): the order returns to ASSIGNED and its open suggestions are `EXPIRED`, in one transaction. The system does *not* do this automatically when the agent returns. Whether a recovered agent should take the orders back (they may still be unwell, or the order may already be late) is the kind of call the checkpoint exists for.
 
-**When I'd remove the checkpoint:** for re-plans where (a) the suggestion came from the AI rather than a fallback, (b) confidence ≥ 0.9, (c) the recommended agent's effective load stays below `maxCapacity`, and (d) the order's SLA would breach before a typical ops response time. That requires capacity and SLA data (both on the roadmap), and an audit trail of auto-decisions before it's trusted.
+**When I'd remove the checkpoint:** for re-plans where (a) the suggestion came from the AI rather than a fallback, (b) confidence ≥ 0.9, (c) the recommended agent's effective load stays below `maxCapacity`, and (d) the order's SLA would breach before a typical ops response time. The capacity and deadline data now exist (ADR-11, ADR-12); what's still missing is an audit trail of auto-decisions, and a track record from Insights, before it's trusted.
 
 **Fleet guardrail: at least one agent stays AVAILABLE.** Taking the last AVAILABLE agent to BUSY or OFFLINE is refused with 409 ("make another agent AVAILABLE first"). Otherwise routing would have no candidates, and every stranded order would sit without a suggestion. The check locks the AVAILABLE rows (`AgentRepository.findByStatusForUpdate`), so two concurrent requests can't both remove the last two. The UI disables those buttons and says why. *Trade-off:* this models the ops console, where a human is changing statuses. In production, an agent's own app reporting OFFLINE (a crash, a breakdown) is a fact, not a request, and can't be refused. That path would bypass the rule and page ops instead.
 
@@ -278,6 +280,105 @@ Option 2. `POST /agents/{id}/heartbeat` records `lastHeartbeatAt`. `HeartbeatMon
 
 ---
 
+## ADR-11: Capacity Limits and Zone-Aware Routing
+
+**Context**  
+Routing ranked on effective load alone. Nothing stopped one agent collecting a dozen orders when they were the only one available, and an agent across town ranked the same as one next door.
+
+**Options considered**
+1. *A separate `ZoneAffinityStrategy`* (the ADR-5 sketch), selectable next to `ai` and `rule-based`.
+2. *Zones and capacity as inputs to every strategy:* capacity as a candidate filter in `RoutingService`, zone distance as part of the rule-based score and as extra columns for the AI.
+
+**Decision**  
+Option 2. A separate strategy would make ops choose between "balanced" and "nearby", when a dispatcher wants both; and the AI would never see location. So:
+- **Capacity** (`RoutingService.rank` + `applyCapacityLimits`): agents whose effective load is at their capacity (`maxCapacity`, else `agents.default-max-capacity` = 6) are left out for every strategy, including the AI and its fallback. If *everyone* is full the agents stay in (the order still needs someone) but confidence is capped at 0.40 with an "over capacity" note. Counting queued suggestions keeps a batch from overfilling anyone.
+- **Zones** (`routing/Zones`): 16 areas with a neighbour map, and a coarse distance (same / neighbour / far / unknown). Rule-based score = effective load + penalty 0/1/3/2. The AI's agent table gains capacity, zone and distance columns, and the prompt asks it to prefer nearby agents.
+
+**Tradeoffs accepted**  
+- Zones are a proxy for travel time. Penalties in "orders" are a judgement call (a neighbour is worth one order, far is worth three); they're constants in one enum, easy to tune.
+- Zone data is maintained by hand on the Fleet page until an agent app reports location.
+
+---
+
+## ADR-12: Re-Planning Before an Order Is Late (SLA Monitor)
+
+**Context**  
+Re-plans only happened when an agent's status changed. An order could sit behind five others with a busy agent and miss its deadline with nobody prompted to act.
+
+**Decision**  
+Orders get a deadline at creation (`orders.default-sla-minutes`, or chosen in the dialog). `SlaMonitor` runs every 30 s, as the ADR-5 plan described (time passing is the event, so a schedule is right). For each ASSIGNED / REASSIGNED order due within `orders.sla.at-risk-minutes` (30) and not yet flagged:
+1. claim it under a row lock (`slaAlertedAt`), so it's handled exactly once even with concurrent runs;
+2. route it with a new `TriggerReason.SLA_RISK` context (same capacity, zone and AI rules; the AI gets a "deadline at risk" situation line);
+3. queue a suggestion **only if** the best agent has fewer orders ahead than the current one; otherwise record that it stays.
+
+The order stays with its agent while ops decides (ADR-9): accept moves it, reject keeps it. Delivering an order withdraws its open suggestions.
+
+**Tradeoffs accepted**  
+- "Fewer orders ahead" is a count, not a time estimate.
+- Flag-once means a rejected order isn't suggested again even as it gets later; repeated alerts would be noise, and the queue still shows it as late.
+- Existing orders don't get backfilled deadlines (they would all be "late" at once).
+
+---
+
+## ADR-13: Live Updates with Server-Sent Events
+
+**Context**  
+The console polled four endpoints every 3 s: up to 3 s of lag, and constant traffic from every open tab.
+
+**Options considered**
+1. *WebSocket (STOMP)* - two-way, but the console never sends anything over it, and it brings a broker abstraction.
+2. *Server-Sent Events carrying the changed data* - fast, but duplicates the API's shapes and permission logic in a second channel.
+3. *SSE carrying only "what kind of data changed"*; the console re-reads through the normal API.
+
+**Decision**  
+Option 3. `GET /events` (`LiveUpdates`) sends `change {topics}`. A JPA entity listener (`ChangeTracker`) on every entity reports writes **after commit**, so every write path is covered without touching services and no console sees rolled-back data. Changes within 150 ms are merged into one event (a re-plan of many orders is one refresh). A comment every 25 s keeps idle connections alive; nginx doesn't buffer `/api`. The console re-reads on each event and on reconnect, and falls back to 3-second polling only while the stream is down. SSE works with the session cookie (ADR-14), which a WebSocket handshake or `EventSource` with custom headers would complicate.
+
+**Tradeoffs accepted**  
+- A change event causes a full re-read of the four lists rather than a patch: simple and always consistent, slightly more data per change.
+- Connections are held per backend instance; several instances would need a shared pub/sub (e.g. Redis) to fan events out.
+
+---
+
+## ADR-14: Sign-In and API Security
+
+**Context**  
+Anyone who could reach the API could change statuses, move orders or switch the routing strategy. The old CORS filter also trusted any origin *containing* `localhost:4200` with credentials (`localhost:4200.evil.com` would match), harmless only because there were no credentials yet.
+
+**Options considered**
+1. *JWT bearer tokens* - stateless, but the token has to live in JavaScript-readable storage, and `EventSource` (ADR-13) can't send an Authorization header.
+2. *Session cookie + CSRF protection* - the cookie is HttpOnly and sent automatically, including on the event stream.
+3. *An external identity provider (OIDC)* - right for an organisation, heavy for one ops team.
+
+**Decision**  
+Option 2 with Spring Security (`config/SecurityConfig`):
+- `POST /auth/login` with `OPS_USERNAME` / `OPS_PASSWORD` creates a session (new id on sign-in; HttpOnly, SameSite=Lax, 12 h). HTTP Basic is also accepted for scripts. Unauthenticated calls get a bare 401 (no `WWW-Authenticate`, so browsers never prompt or cache Basic credentials).
+- CSRF double-submit: an `XSRF-TOKEN` cookie that the console echoes in `X-XSRF-TOKEN`, which Angular's HttpClient does automatically. Header-authenticated requests (Basic, agent token) are exempt because a browser won't add those headers on its own.
+- Agents' phone apps authenticate heartbeats with a shared `X-Agent-Token` and can do nothing else.
+- 5 failed sign-ins from one address → 10-minute lockout.
+- CORS is an exact allow-list; the console doesn't need it because it calls `/api` on its own origin.
+
+**Tradeoffs accepted**  
+- One shared ops account: the activity log can't name the person. Named users and roles are the next step.
+- Sessions and the lockout counter are in memory: a backend restart signs everyone out, and several instances would need shared session storage.
+
+---
+
+## ADR-15: Flyway Migrations and PostgreSQL
+
+**Context**  
+`ddl-auto=update` only adds, can't convert types, and turned H2 enum columns into native `ENUM`s that needed manual `ALTER`s for every new value. Docker ran H2 in a volume, which is not a production database.
+
+**Decision**  
+Flyway owns the schema (`db/migration`), Hibernate creates nothing (`ddl-auto=none`), and Docker Compose runs PostgreSQL 16 (`DATABASE_URL`); local runs and tests keep H2.
+- `V1` is written to be **idempotent** (`IF NOT EXISTS`, `SET DATA TYPE`) and existing databases are baselined at version 0, so V1 runs on them too: it adds whatever columns their age lacks and converts the `ENUM` columns to `VARCHAR`. This upgraded the real development database in place, verified on a copy first.
+- Sample data moved from `data.sql` into `V2` (inserted only into an empty database).
+- Migrations use SQL valid on both H2 and PostgreSQL; CI runs the main flow on a real PostgreSQL to keep that true.
+
+**Tradeoffs accepted**  
+- Two database engines to keep compatible. The cost is a little care in SQL; the benefit is a zero-setup local run.
+
+---
+
 ## Summary Table
 
 | ADR | Topic | Decision | Key point |
@@ -287,13 +388,18 @@ Option 2. `POST /agents/{id}/heartbeat` records `lastHeartbeatAt`. `HeartbeatMon
 | 3 | LLM resilience | Typed failures, provider chain, validation, labelled fallback | Never silent; source shows what really answered |
 | 4 | Loop trigger | `@TransactionalEventListener(AFTER_COMMIT)` + `@Async` | Sees committed state; no DB tx across LLM calls |
 | 5 | Extensibility | Nullable placeholder columns, context-based contract | Zone strategy and SLA trigger are additive |
-| 6 | Frontend | Angular 17 standalone + RxJS polling | Async results appear without a click |
+| 6 | Frontend | Angular 17 standalone (polling, now push: ADR-13) | Async results appear without a click |
 | 7 | Prompts | Routine request vs incident report | Model knows it's recovering and sees the whole batch |
 | 8 | Idempotency | Pre-check + re-check under row lock | No duplicates even with concurrent triggers |
 | 9 | Checkpoint | Queue, never auto-assign | Accept is atomic; criteria for removing it defined |
 | 10 | Offline detection | Heartbeats + scheduled monitor → normal OFFLINE event | Nobody has to notice; ops still decides when they're back |
+| 11 | Capacity & zones | Capacity filter for all strategies; zone distance in the score and the AI table | Balanced *and* nearby, nobody silently overloaded |
+| 12 | Deadlines | Scheduled SLA monitor, flag once, suggest only if someone is faster | Re-plans before an order is late, not just after a failure |
+| 13 | Live updates | SSE "what changed" events from a JPA listener, after commit | Instant, one source of truth, polling only as fallback |
+| 14 | Security | Session cookie + CSRF, Basic for scripts, agent token for heartbeats | Works with the event stream; no tokens in JavaScript |
+| 15 | Schema | Flyway (idempotent baseline) + PostgreSQL in Docker | Existing databases upgraded in place; no more manual ALTERs |
 
 ---
 
 *Document started:* 2026-09-23  
-*Last updated:* 2026-10-04
+*Last updated:* 2026-10-06

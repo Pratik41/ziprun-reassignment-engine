@@ -200,7 +200,8 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(readOnly = true)
     public List<Order> findActiveOrdersForAgent(String agentId) {
-        return orderRepository.findByAssignedAgentIdAndStatusIn(agentId, OrderStatus.ACTIVE);
+        // oldest first: they've waited longest, and re-plans are deterministic (batch balancing depends on order)
+        return orderRepository.findByAssignedAgentIdAndStatusInOrderByCreatedAtAscIdAsc(agentId, OrderStatus.ACTIVE);
     }
 
     @Override

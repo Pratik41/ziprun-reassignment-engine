@@ -1,6 +1,6 @@
 # How ZipRun works
 
-This guide explains the whole system: what happens when an agent's status changes, how the **rule-based** and **AI** strategies each pick an agent, what protects the AI path from bad answers, and the rules that keep the data consistent. Diagrams are drawn with Mermaid, which GitHub renders automatically.
+This guide explains the whole system: what happens when an agent's status changes or an order is about to be late, how the **rule-based** and **AI** strategies each pick an agent (load, capacity and location), what protects the AI path from bad answers, how the console stays live and signed in, and the rules that keep the data consistent. Diagrams are drawn with Mermaid, which GitHub renders automatically.
 
 Code paths are relative to `backend/reassignment-engine/src/main/java/com/ziprun/`.
 
@@ -20,6 +20,10 @@ Code paths are relative to `backend/reassignment-engine/src/main/java/com/ziprun
 13. [Known limitations](#13-known-limitations)
 14. [Troubleshooting](#14-troubleshooting)
 15. [History and metrics (Insights)](#15-history-and-metrics-insights)
+16. [Capacity, zones and delivery deadlines](#16-capacity-zones-and-delivery-deadlines)
+17. [Live updates](#17-live-updates)
+18. [Sign-in and security](#18-sign-in-and-security)
+19. [The database and migrations](#19-the-database-and-migrations)
 
 ---
 
@@ -38,19 +42,24 @@ flowchart LR
         S["Services<br/>Agent / Order / Suggestion"]
         EV(["Domain events<br/>Offline / Busy / Available"])
         H["ReplanEventHandler<br/>(the agentic loop)"]
+        SM["SlaMonitor<br/>(deadlines, every 30 s)"]
+        LU["LiveUpdates<br/>GET /events"]
         R["RoutingService"]
         RB["Rule-based strategy"]
         AI["AI strategy"]
         GW["LLMGateway"]
     end
 
-    DB[("H2 database<br/>agents, orders,<br/>suggestions")]
+    DB[("Database<br/>PostgreSQL (Docker) / H2 (local)<br/>agents, orders, suggestions")]
     G["Gemini"]
     Q["Groq"]
 
-    UI -- "HTTP (polls every 3s)" --> C
+    UI -- "HTTP /api (signed in)" --> C
+    LU -. "change events (pushed)" .-> UI
     C --> S
     S --> DB
+    DB -. "after commit" .-> LU
+    SM --> R
     S -- "status change" --> EV
     EV -- "after commit, async" --> H
     H --> R
@@ -144,7 +153,7 @@ sequenceDiagram
     actor Ops
     participant UI as Angular UI
     participant API as AgentController / AgentService
-    participant DB as H2
+    participant DB as Database
     participant Handler as ReplanEventHandler
     participant Route as RoutingService
     participant Sug as SuggestionService
@@ -167,8 +176,8 @@ sequenceDiagram
             Handler->>Handler: skip (idempotent)
         end
     end
-    UI->>API: poll every 3s
-    API-->>UI: new suggestions appear with the Auto re-plan tag
+    API-->>UI: change event (GET /events), the UI re-reads
+    Note over UI: new suggestions appear with the Auto re-plan tag
     Ops->>UI: Accept
 ```
 
@@ -188,13 +197,18 @@ Every caller uses the same pipeline (`RoutingService.rank(order, context)`):
 - the agentic loop, with a **recovery** context (who failed, the whole stranded batch)
 - the "Get suggestion" button / `POST /orders/{id}/suggest`, with an **initial** context
 - the **New order** dialog / `POST /routing/recommend`, with an initial context and a draft order that isn't saved (see below)
+- the **SLA monitor**, with a deadline-risk context ([section 16](#16-capacity-zones-and-delivery-deadlines))
 
 ```mermaid
 flowchart TD
     START(["route(order, context)"]) --> CAND["Candidates = AVAILABLE agents<br/>minus the order's own agent"]
     CAND --> LOAD["Add pending load:<br/>count PENDING suggestions per agent"]
-    LOAD --> WHICH{"Active strategy?<br/>(toggle in the UI)"}
-    WHICH -- "rule-based" --> RB["Rule-based:<br/>rank by effective load"]
+    LOAD --> CAP{"Anyone below<br/>capacity?"}
+    CAP -- "yes" --> KEEP["Leave out agents<br/>at capacity"]
+    CAP -- "no, all full" --> ALL["Keep everyone,<br/>flag 'over capacity'"]
+    KEEP --> WHICH{"Active strategy?<br/>(toggle in the UI)"}
+    ALL --> WHICH
+    WHICH -- "rule-based" --> RB["Rule-based:<br/>rank by load + zone distance"]
     WHICH -- "ai" --> AI["AI strategy<br/>(section 6)"]
     AI -- "valid answer" --> OUT
     AI -- "any failure" --> RB2["Rule-based fallback<br/>source = rule-based (AI fallback: KIND)"]
@@ -209,6 +223,7 @@ flowchart TD
 
 - **Candidates** are only `AVAILABLE` agents. Busy agents are still delivering and don't take more; Offline agents can't.
 - **The order's own agent is excluded**, because "reassign to the same person" isn't a reassignment. That's why an order whose agent is back shows **"Keep with …"** instead.
+- **Agents at capacity are left out** (effective load ≥ their capacity). The reasoning names who was skipped. If *everyone* is full, nobody is left out (the order still needs someone) but the suggestion is flagged, see the table below.
 - **Switching strategy** (`PUT /routing/strategy` or the toggle) affects the next routing call on both paths. The choice is saved in the database (`app_settings`) and restored on restart; `ROUTING_STRATEGY` is only the first-run default. Existing suggestions keep the tag of whatever made them.
 - **Confidence guardrail.** Whatever the strategy says, `RoutingService` caps confidence when the roster can't support certainty:
 
@@ -216,6 +231,8 @@ flowchart TD
   |---|---|---|
   | Re-plan with fewer available agents than stranded orders ("thin roster") | 0.60 | "Thin roster: N stranded order(s) but only M available agent(s); consider making more agents available." |
   | Only one candidate (nothing to compare against) | 0.75 | none |
+  | Every available agent is at capacity | 0.40 | "Over capacity: every available agent is at their limit (…); this would overload them. Make more agents available or raise a capacity." |
+  | Some agents left out for being full | unchanged | "Skipped (at capacity): Amit Patel 6/6." |
 
   This was added after the AI gave 0.95 confidence to the only available agent, who would have ended up with 8 orders.
 - **Timing.** Each routing call is timed, including any AI calls, and the time is stored on the suggestion (`routingMillis`) for the Insights page.
@@ -253,40 +270,47 @@ sequenceDiagram
 
 ### The rule
 
-> **Pick the candidate with the lowest *effective load*. Break ties by agent ID.**
+> **Pick the candidate with the lowest *score*. Break ties by load, then agent ID.**
 
 ```
 effective load = active orders (orders they are carrying now)
                + pending suggestions already recommending them
+
+score = effective load + zone penalty
+zone penalty   = 0 already in the pickup zone
+               + 1 in a neighbouring zone
+               + 2 location unknown
+               + 3 further away
+               (0 for everyone when the order has no pickup zone)
 ```
 
-Counting pending suggestions matters. Without it, every stranded order in a batch would go to the same "least loaded" agent, because nothing has been accepted yet.
+Counting pending suggestions matters. Without it, every stranded order in a batch would go to the same "least loaded" agent, because nothing has been accepted yet. The zone penalty is in "orders": a nearby agent with one more order beats a far one, but an agent across town still wins if everyone nearby is swamped. Agents at capacity never get here; `RoutingService` already left them out ([section 4](#4-how-an-agent-is-chosen-the-routing-pipeline)).
 
 ### Confidence
 
 ```mermaid
 flowchart TD
     T{"How many candidates?"} -- "1" --> C70["0.70<br/>no alternative to compare"]
-    T -- "2 or more" --> GAP{"Gap between best and<br/>runner-up effective load"}
+    T -- "2 or more" --> GAP{"Gap between best and<br/>runner-up score"}
     GAP -- "0 (tie)" --> C60["0.60<br/>picked by agent ID"]
     GAP -- "1, 2, 3, 4+" --> CG["0.80, 0.85, 0.90, 0.95<br/>(0.75 + 0.05 x gap, max 0.95)"]
 ```
 
-Lower-ranked agents get `0.50 / (1 + how much heavier they are than the best)`, so a runner-up at +1 scores 0.25.
+Lower-ranked agents get `0.50 / (1 + how much worse their score is than the best)`, so a runner-up at +1 scores 0.25. `RoutingService` then applies the confidence caps (thin roster, single candidate, everyone full).
 
 ### Worked example (the sample data)
 
-Priya (AGT-001) goes offline holding ORD-001, ORD-002 and ORD-008. Rahul (AGT-002) and Kiran (AGT-004) are Available with 0 orders each.
+Priya (AGT-001) goes offline holding ORD-001 (pickup Koramangala), ORD-002 (HSR Layout) and ORD-008 (Peenya). Rahul (AGT-002, in HSR Layout) and Kiran (AGT-004, in Malleshwaram) are Available with 0 orders each.
 
-| Order | Rahul effective | Kiran effective | Pick | Why | Confidence |
-|---|---|---|---|---|---|
-| ORD-001 | 0 | 0 | **Rahul** | tie, `AGT-002` < `AGT-004` | 0.60 |
-| ORD-002 | 0 + **1 pending** = 1 | 0 | **Kiran** | lighter by 1 | 0.80 |
-| ORD-008 | 1 | 0 + **1 pending** = 1 | **Rahul** | tie again | 0.60 |
+| Order | Rahul: load + distance | Kiran: load + distance | Pick | Why |
+|---|---|---|---|---|
+| ORD-001 (Koramangala) | 0 + 1 neighbour = **1** | 0 + 3 far = 3 | **Rahul** | next door |
+| ORD-002 (HSR Layout) | **1 pending** + 0 same zone = **1** | 0 + 3 far = 3 | **Rahul** | already there, even with one queued |
+| ORD-008 (Peenya) | 2 pending + 3 far = 5 | 0 + 3 far = **3** | **Kiran** | both far, Kiran is free |
 
-Result: Rahul 2, Kiran 1. The reasoning ops sees, for ORD-002:
+Result: Rahul 2, Kiran 1. Each pick wins by 2 points, which the strategy rates 0.85, but three stranded orders with only two available agents is a thin roster, so every suggestion is capped at 0.60 and says so. The reasoning ops sees, for ORD-008:
 
-> Recovery: Priya Sharma went offline leaving 3 stranded order(s). Kiran Nair has 0 active orders. Lightest load of 2 available agents; next best is Rahul Verma with 0 active orders + 1 pending suggestion.
+> Recovery: Priya Sharma went offline leaving 3 stranded order(s). Kiran Nair has 0 active orders (0/6 of capacity), in Malleshwaram, away from Peenya. Best on load and distance of 2 available agents; next best is Rahul Verma with 0 active orders + 2 pending suggestions (2/6 of capacity), in HSR Layout, away from Peenya. Thin roster: 3 stranded order(s) but only 2 available agent(s); consider making more agents available.
 
 ### When to use it
 
@@ -521,6 +545,10 @@ The model replies in JSON. `ReasoningExtractor` decodes only the `reasoning` fie
 | Only `AVAILABLE` agents get new orders (create, reassign, accept, keep) | `BUSY` means "not taking more" | `OrderServiceImpl`, `SuggestionServiceImpl` + filtered dropdowns |
 | AI answers are checked against the real roster | models sometimes invent IDs | `AIRoutingStrategy.validate` |
 | Confidence is capped on a thin roster (0.60) or a single candidate (0.75) | no strategy should sound certain when the fleet can't back it up | `RoutingService.applyRosterLimits` |
+| Agents at capacity aren't suggested; if everyone is, confidence ≤ 0.40 with a warning | nobody gets overloaded without ops seeing it | `RoutingService.applyCapacityLimits` |
+| An at-risk order is moved only if someone could start it sooner, and is flagged once | no churn: a deadline doesn't trigger a suggestion every 30 s | `SlaMonitor` + `OrderServiceImpl.claimSlaAlert` (row lock) |
+| Delivering an order withdraws its open suggestions | nothing left to accept on a finished order | `OrderServiceImpl.updateStatus` |
+| Every API call needs a signed-in user; writes need the CSRF token | a stranger, or another website, can't move orders | `config/SecurityConfig` |
 | Silent agents are taken off duty automatically | a dead phone or a crash shouldn't wait for someone to notice | `HeartbeatMonitor` + `AgentServiceImpl.markOfflineIfSilentSince` |
 | A suggestion is re-checked right before saving | the roster can change while the AI thinks | `SuggestionServiceImpl.createSuggestion` |
 | Order status changes follow the state machine | no impossible jumps (e.g. DELIVERED → ASSIGNED) | `OrderStatus.canTransitionTo` |
@@ -539,7 +567,10 @@ The model replies in JSON. `ReasoningExtractor` decodes only the `reasoning` fie
 - **Pending load counts every open suggestion**, including manual ones on unrelated orders. An agent with many unanswered suggestions looks busier to routing.
 - **Each AI call costs time and quota.** A re-balance of 8 waiting orders with Gemini takes around a minute; rule-based is instant.
 - **The test suite never calls a real AI.** It uses a fake provider that lives only in `src/test` and can simulate each failure (timeout, quota, garbage, made-up agent). The running app uses only Gemini and Groq.
-- **You can inspect the database** at http://localhost:8080/h2-console (JDBC URL `jdbc:h2:file:./data/ziprun-db`, user `sa`, empty password). The path is relative to the folder the backend was started from, normally `backend/reassignment-engine`.
+- **You can inspect the local database** by starting the backend with `H2_CONSOLE_ENABLED=true`, signing in, and opening http://localhost:8080/h2-console (JDBC URL `jdbc:h2:file:./data/ziprun-db`, user `sa`, empty password). The path is relative to the folder the backend was started from, normally `backend/reassignment-engine`. With Docker, use `docker compose exec db psql -U ziprun`.
+- **Capacity counts queued suggestions.** An agent with 4 orders and 2 unanswered suggestions is at 6/6 and won't be suggested again until something is accepted, rejected or delivered.
+- **Zones are deliberately coarse:** same, neighbouring, or further. They're a stand-in for travel time; the list lives in `routing/Zones.java`.
+- **Orders without a deadline are never flagged**, and existing orders from before deadlines existed don't get one.
 - **The backend log tells the story.** Search for `AGENTIC LOOP` to see each trigger and its outcome (`queued / skipped / no available agent / failed`), and `LLM provider` to see which AI answered and how long it took.
 - **Background work runs on 2 threads** (`spring.task.execution.pool.*`), so simultaneous status changes queue up rather than run all at once.
 
@@ -553,10 +584,10 @@ Honest list of what isn't solved yet (most are on the Roadmap in the README):
 |---|---|---|
 | Heartbeats come from a browser simulator, not a real agent app | Automatic offline detection works, but needs an app to send heartbeats | Build the agent app (on the Roadmap) |
 | Background events aren't durable | If the backend dies mid-loop, unfinished orders wait for the next trigger | Outbox table or a message broker |
-| Schema comes from `ddl-auto=update` | Adding an enum value needs a manual `ALTER` on existing H2 databases | Flyway migrations |
-| No authentication | Anyone who can reach the API can change statuses or the strategy | Spring Security |
-| UI polls every 3 seconds | Up to 3 s delay, constant small requests | Push updates over SSE/WebSocket |
-| Single backend instance assumed | In-process events and the heartbeat monitor run per instance | A message broker, and one elected monitor |
+| Single backend instance assumed | In-process events, live-update connections, the sign-in lockout and the AI circuit breakers are per instance | A message broker and a shared store (e.g. Redis) |
+| One shared ops login | The activity log can't say *which* person did something | Named accounts and roles |
+| Zones, not travel time | "Neighbouring" is a rough proxy for "close"; traffic is ignored | Coordinates and a routing API |
+| "Could start it sooner" means fewer orders ahead | The deadline check doesn't know how long each order takes | Per-order time estimates |
 
 ---
 
@@ -573,6 +604,13 @@ Honest list of what isn't solved yet (most are on the Roadmap in the README):
 | Accept fails with "…isn't taking new orders" | The recommended agent went Busy/Offline since the suggestion was made | Wait for the refresh; a new suggestion replaces it |
 | Backend won't start: `UnsupportedClassVersionError` | Running on Java 8/11 | Use Java 17+ (`JAVA_HOME`), or run with `docker compose up --build` |
 | An agent went Offline on their own | Their app stopped sending heartbeats (see the note on their Fleet card) | Set them Available again when they're back on shift |
+| An Available agent is never suggested | They're at capacity (red load bar) | Raise their capacity on the Fleet page, or wait for orders to be delivered |
+| Every suggestion says "Over capacity" | Everyone available is full | Make more agents Available or raise capacities (`AGENTS_DEFAULT_MAX_CAPACITY`) |
+| An order is late but nothing appeared under "Deadline at risk" | Nobody could start it sooner, or it has no deadline | The activity log says which ("no agent could start it sooner") |
+| The console keeps returning to Sign in | The session expired (12 h) or the backend restarted | Sign in again; sessions live in the backend's memory |
+| Sign-in says "Too many failed sign-ins" | 5 wrong passwords from your address | Wait 10 minutes |
+| curl gets 401 | The API needs a user now | Add `-u ops:ziprun` (or your `OPS_USERNAME:OPS_PASSWORD`) |
+| The sidebar says "Updating every 3s" instead of "Live" | The live stream (`/events`) dropped; the console fell back to polling | It reconnects by itself; check a proxy isn't buffering `text/event-stream` |
 
 ---
 
@@ -590,4 +628,117 @@ The **Insights** page answers "is the AI actually better than rule-based?" from 
 
 Sources are read from each suggestion's `source`: `ai:*` → AI, `…fallback…` → AI fallback, `rule-based` → Rule-based, empty → "Before tracking".
 
-The **activity log** (`activity_log` table, `GET /activity`) records every meaningful change: agent status (by ops, or automatic), orders created/delivered/reassigned/kept, suggestions created/accepted/rejected/withdrawn, and strategy switches. Each entry is written in the same transaction as the change it describes, so the log never shows something that didn't actually happen.
+The **activity log** (`activity_log` table, `GET /activity`) records every meaningful change: agent status (by ops, or automatic), agent zone and capacity edits, orders created/delivered/reassigned/kept, suggestions created/accepted/rejected/withdrawn, deadline alerts, and strategy switches. Each entry is written in the same transaction as the change it describes, so the log never shows something that didn't actually happen.
+
+---
+
+## 16. Capacity, zones and delivery deadlines
+
+### Capacity
+
+Every agent can carry at most a certain number of orders: their own `maxCapacity` (set on the Fleet page), or the fleet default `AGENTS_DEFAULT_MAX_CAPACITY` (6; `0` means no limit). Routing compares it with **effective load** (active orders + suggestions already queued for them), so a batch of suggestions can't overfill someone either. See [section 4](#4-how-an-agent-is-chosen-the-routing-pipeline) for what happens when agents are full. The console shows load as `4/6`, red when full.
+
+### Zones
+
+`routing/Zones.java` lists 16 Bengaluru areas and which ones border each other. Agents have a `currentZone` (Fleet page) and orders a pickup and drop-off zone (New order dialog). Routing compares the **pickup** zone with each agent's zone:
+
+| Distance | Penalty (rule-based score) | AI sees |
+|---|---|---|
+| same zone | +0 | `same` |
+| neighbouring zone | +1 | `neighbour` |
+| unknown (agent has no zone) | +2 | `unknown` |
+| further away | +3 | `far` |
+
+The AI gets the same information as extra columns in its agent table (capacity, zone, distance to pickup) and is told to prefer nearby agents. An order without a pickup zone is routed on load alone.
+
+### Delivery deadlines (the SLA monitor)
+
+New orders get `slaDeadline = created + ORDERS_DEFAULT_SLA_MINUTES` (120) unless the dialog picks another time or "No deadline". `service/order/SlaMonitor.java` runs every 30 seconds:
+
+```mermaid
+flowchart TD
+    T(["Every 30 s"]) --> F["Orders ASSIGNED / REASSIGNED,<br/>due within 30 min (or late),<br/>not flagged yet"]
+    F --> C["Claim it: set slaAlertedAt<br/>(row lock, so only once)"]
+    C --> R["Route with SLA_RISK context<br/>(same capacity, zone, AI rules)"]
+    R --> Q{"Best agent has fewer<br/>orders ahead than the<br/>current one?"}
+    Q -- "yes" --> S["Queue an SLA_RISK suggestion<br/>shown under 'Deadline at risk'"]
+    Q -- "no" --> K["Leave it with its agent"]
+    S --> L["Activity log:<br/>'at risk … suggested moving it to X'"]
+    K --> L2["Activity log:<br/>'at risk … no agent could start it sooner'"]
+```
+
+- **"Fewer orders ahead":** the current agent has this order plus `n − 1` others; another agent is faster if their effective load is below `n − 1`. It's a count, not a time estimate (see [limitations](#13-known-limitations)).
+- **Nothing moves by itself.** Accept moves the order to the faster agent (`ASSIGNED → REASSIGNED`); Reject keeps it where it is.
+- **Each order is flagged once.** If ops rejects, the monitor doesn't nag every 30 seconds.
+- **Waiting orders** (already `REASSIGNMENT_PENDING`) aren't touched by the monitor; the queue lists them soonest-deadline first instead.
+- **Delivering an order** withdraws any open suggestion for it.
+- The AI gets a different situation line for these: *"this order is at risk of missing its delivery deadline with its current agent … say why they would be faster"*, and the deadline with minutes left.
+
+---
+
+## 17. Live updates
+
+The console doesn't poll. It keeps one Server-Sent Events connection open to `GET /events`:
+
+```mermaid
+sequenceDiagram
+    participant A as Any write (ops, re-plan loop, monitors)
+    participant JPA as ChangeTracker (JPA listener)
+    participant L as LiveUpdates
+    participant UI as Every open console
+    A->>JPA: row inserted / updated
+    JPA->>L: after the transaction commits: "orders changed"
+    Note over L: changes within 150 ms are merged into one event
+    L-->>UI: event: change {topics: [orders, suggestions, activity]}
+    UI->>UI: re-read through the normal API
+```
+
+- **Every write path is covered** because the hook is on the entities (`@EntityListeners(ChangeTracker.class)`), not in each service.
+- **Only after commit**, so a console never re-reads data that is later rolled back.
+- **Events say *what kind* of data changed, not the data.** The console re-reads through the normal endpoints, so there's one source of truth.
+- **If the stream drops** (backend restart, network), the browser reconnects by itself and the console polls every 3 seconds meanwhile; the sidebar says "Updating every 3s" instead of "Live · instant updates". A comment line every 25 s keeps idle connections open through proxies (nginx is configured not to buffer `/api`).
+
+---
+
+## 18. Sign-in and security
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (console)
+    participant API as Backend
+    B->>API: GET /api/auth/me
+    API-->>B: 401 (not signed in) + XSRF-TOKEN cookie
+    B->>API: POST /api/auth/login {username, password}
+    API-->>B: 200 + session cookie (new id)
+    B->>API: PATCH /api/agents/... with X-XSRF-TOKEN = cookie value
+    API-->>B: 200
+    Note over B,API: a forged request from another site can't read the cookie,<br/>so it can't send the header: 403
+```
+
+| Who | How they authenticate | Can do |
+|---|---|---|
+| Ops in the console | `POST /auth/login` → session cookie (HttpOnly, SameSite=Lax, 12 h) | everything |
+| Scripts / curl | HTTP Basic (`-u ops:…`) | everything |
+| An agent's phone app | header `X-Agent-Token: $AGENT_APP_TOKEN` | heartbeats only |
+
+- **One account** from `OPS_USERNAME` / `OPS_PASSWORD` (default `ops` / `ziprun`, with a warning in the log until it's changed).
+- **CSRF:** writes from a session must carry the `XSRF-TOKEN` cookie value in `X-XSRF-TOKEN`. Angular's HttpClient does this automatically; the streamed "Get suggestion" (which uses `fetch`) adds it by hand. Basic and agent-token calls are exempt because a browser never adds those headers by itself.
+- **Brute force:** 5 wrong passwords from one address lock it out for 10 minutes (429).
+- **No browser prompt:** 401s carry no `WWW-Authenticate`, so browsers never show their own login box or remember Basic credentials.
+- **CORS** is an exact allow-list (`CORS_ALLOWED_ORIGINS`). The console doesn't need it: it calls `/api` on its own origin. (An earlier filter trusted any origin *containing* `localhost:4200`, which a page at `localhost:4200.evil.com` would have matched; it was removed when sign-in arrived.)
+- **Tests** run with `security.enabled=false` except `SecurityIntegrationTest`, which checks all of the above with security on.
+
+---
+
+## 19. The database and migrations
+
+- **Locally** the backend uses an H2 file (`backend/reassignment-engine/data/`). **Docker Compose** runs PostgreSQL 16 and points `DATABASE_URL` at it. CI runs the main flow against a real PostgreSQL too.
+- **Flyway owns the schema** (`src/main/resources/db/migration`); Hibernate doesn't create or change tables (`ddl-auto=none`).
+
+| Migration | What it does |
+|---|---|
+| `V1__baseline_schema.sql` | all tables. Idempotent (`IF NOT EXISTS`) so it also upgrades databases created before migrations existed, which are baselined at version 0; converts H2's native ENUM columns to VARCHAR so new enum values (like `SLA_RISK`) need no manual `ALTER` |
+| `V2__seed_sample_data.sql` | the 5 sample agents and 8 orders, only into an empty database |
+| `V3__zones_capacity_deadlines.sql` | `orders.sla_alerted_at`, and zones for the sample data (only rows still exactly as seeded) |
+
+To change the schema, add `V4__what_it_does.sql`. Keep it valid on both H2 and PostgreSQL: `ADD COLUMN IF NOT EXISTS`, `ALTER COLUMN … SET DATA TYPE`, and standard types work on both.

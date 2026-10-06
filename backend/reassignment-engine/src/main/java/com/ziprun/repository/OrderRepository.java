@@ -25,7 +25,7 @@ public interface OrderRepository extends JpaRepository<Order, String> {
      * Orders an agent still owns (ASSIGNED, REASSIGNED, or already REASSIGNMENT_PENDING).
      * Used by the agentic loop to find stranded orders when that agent goes offline.
      */
-    List<Order> findByAssignedAgentIdAndStatusIn(String agentId, Collection<OrderStatus> statuses);
+    List<Order> findByAssignedAgentIdAndStatusInOrderByCreatedAtAscIdAsc(String agentId, Collection<OrderStatus> statuses);
 
     /**
      * Row lock on the order (SELECT ... FOR UPDATE). Serialises concurrent re-plans
