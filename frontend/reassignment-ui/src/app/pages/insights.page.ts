@@ -123,7 +123,7 @@ const SOURCE_ICON: Record<string, string> = { ai: 'sparkles', 'rule-based': 'sca
   `,
   styles: [`
     .small { font-size: 12.5px; }
-    .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+    .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
     .kpi { display: flex; gap: 12px; padding: 14px 16px; }
     .kpi-icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; flex: none; }
     .kpi-label { font-size: 12.5px; color: var(--text-2); font-weight: 500; }
@@ -170,6 +170,9 @@ export class InsightsPage implements OnDestroy {
         detail: 'Across all sources' },
       { label: 'AI fallback rate', value: m?.aiFallbackRate != null ? percent(m.aiFallbackRate) : '-', icon: 'alert', tone: 'warning',
         detail: providers ? `Answered by: ${providers}` : 'No AI suggestions yet' },
+      { label: 'Recommended pick used', value: m?.newOrderPicks.followRate != null ? percent(m.newOrderPicks.followRate) : '-',
+        icon: 'sparkles', tone: 'primary',
+        detail: m?.newOrderPicks.recommended ? `${m.newOrderPicks.followed} of ${m.newOrderPicks.recommended} new orders` : 'No new orders with a pick yet' },
       { label: 'AI response time', value: ai?.avgRoutingMs != null ? this.seconds(ai.avgRoutingMs) : '-', icon: 'clock', tone: 'violet',
         detail: ai?.p95RoutingMs != null ? `p95 ${this.seconds(ai.p95RoutingMs)}` : 'Average per suggestion' },
     ];

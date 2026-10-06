@@ -29,10 +29,11 @@ This project automates that recovery. When an agent goes offline, the system fin
 - **Two routing strategies, switchable at runtime:** `ai` (Gemini, with Groq as backup) and `rule-based` (least effective load). The choice is saved and survives restarts. New strategies plug in as a single class.
 - **AI you can trust:** every recommended agent is checked against the real roster, and any AI failure (timeout, quota, bad JSON, made-up agent) falls back to rule-based. Each suggestion is labelled with what actually produced it, e.g. `ai:gemini` or `rule-based (AI fallback: TIMEOUT)`. Confidence is capped when the roster is thin, so no strategy can claim certainty it doesn't have.
 - **Insights:** acceptance rate, confidence and response time per strategy (AI vs rule-based vs fallback), the AI fallback rate, and an activity log of everything ops and the system did.
+- **Recommended agent for new orders:** the New order dialog asks the active strategy for the top 3 Available agents (lightest effective load first; the AI also weighs the description), pre-selects the best one and shows why. Ops can still pick anyone; Insights tracks how often the recommended agent is used.
 - **Load balancing:** routing counts active orders *plus* suggestions already queued, so a batch of stranded orders is spread across agents instead of piling onto one.
 - **Human in the loop:** the system only suggests. Ops accepts, rejects, reassigns manually, or keeps an order with its original agent once they're available again.
 - **Live reasoning:** "Get suggestion" streams the AI's explanation as it is generated (Server-Sent Events).
-- **Ops console:** queue with KPIs, fleet and orders views, toast notifications, light and dark themes, works down to tablet width.
+- **Ops console:** queue with KPIs, fleet and orders views, toast notifications, light and dark themes, responsive down to phone width (bottom tab bar on small screens).
 - **Fleet guardrails:** the last Available agent can't go Busy or Offline, and only Available agents can be given orders.
 
 ## Getting started
@@ -110,7 +111,7 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 
 | Method | Path | Notes |
 |---|---|---|
-| `POST` | `/orders` | `{description, assignedAgentId}` → 201 (agent must be `AVAILABLE`) |
+| `POST` | `/orders` | `{description, assignedAgentId, recommendedAgentId?}` → 201 (agent must be `AVAILABLE`; `recommendedAgentId` records the pick that was shown) |
 | `GET` | `/orders?status=` | `ASSIGNED`, `REASSIGNMENT_PENDING`, `REASSIGNED`, `DELIVERED` |
 | `GET` | `/orders/{id}` | |
 | `PATCH` | `/orders/{id}/status` | state machine enforced (409 on illegal transition) |
@@ -124,7 +125,8 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 | `GET` | `/suggestions?status=` | `PENDING`, `ACCEPTED`, `REJECTED`, `EXPIRED` (withdrawn by the system) |
 | `PATCH` | `/suggestions/{id}` | `{status: ACCEPTED \| REJECTED}`; accept reassigns the order atomically |
 | `GET` / `PUT` | `/routing/strategy` | view / switch the active strategy at runtime `{strategy}` (saved, survives restarts) |
-| `GET` | `/metrics` | suggestion outcomes per source (AI / rule-based / fallback): acceptance rate, confidence, response time |
+| `POST` | `/routing/recommend` | `{description?}` → top 3 Available agents for a new order from the active strategy, best first; nothing is saved |
+| `GET` | `/metrics` | suggestion outcomes per source (AI / rule-based / fallback): acceptance rate, confidence, response time; how often new orders went to the recommended agent |
 | `GET` | `/activity?limit=50` | activity log, newest first: who did what, when (`ops` or `system`) |
 
 Errors always have one shape: `{status, error, message, path, timestamp, details}`, with 400 (bad input), 404 (unknown id) and 409 (conflicts with current state).
@@ -177,9 +179,9 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-53 tests, run on every push by GitHub Actions (which also builds the Docker images and smoke-tests the running stack). They need no API keys: they use an in-memory database and a test-only fake LLM.
+56 tests, run on every push by GitHub Actions (which also builds the Docker images and smoke-tests the running stack). They need no API keys: they use an in-memory database and a test-only fake LLM.
 - **Unit:** rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction, saved strategy on restart, thin-roster confidence cap.
-- **End-to-end** (HTTP + background loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; re-balance when an agent becomes available; recommendation refused if the agent went offline mid-routing; keep with original agent; manual reassign; last Available agent protected; structured errors; async fallback when the AI makes up an agent; SSE streaming, including fallback; heartbeat auto-offline (and manual override); activity log and metrics.
+- **End-to-end** (HTTP + background loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; re-balance when an agent becomes available; recommendation refused if the agent went offline mid-routing; keep with original agent; manual reassign; last Available agent protected; structured errors; async fallback when the AI makes up an agent; SSE streaming, including fallback; heartbeat auto-offline (and manual override); activity log and metrics; new-order recommendations (lighter agent first, nothing saved, followed/overridden recorded).
 
 ## Roadmap
 

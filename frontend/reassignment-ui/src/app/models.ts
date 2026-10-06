@@ -27,6 +27,9 @@ export interface Order {
   pickupZone: string | null;
   dropoffZone: string | null;
   slaDeadline: string | null;
+  /** Top pick the recommendation engine showed when the order was created (null if none). */
+  recommendedAgentId: string | null;
+  followedRecommendation: boolean | null;
 }
 
 export interface Suggestion {
@@ -77,6 +80,21 @@ export interface MetricsSummary {
   aiFallbackRate: number | null;
   aiProviders: Record<string, number>;
   bySource: SourceStats[];
+  newOrderPicks: { recommended: number; followed: number; followRate: number | null };
+}
+
+/** One ranked pick from POST /routing/recommend (same shape as a routing result). */
+export interface Recommendation {
+  recommendedAgentId: string;
+  confidence: number;
+  reasoning: string;
+  source: string;
+  routingMillis: number | null;
+}
+
+export interface RecommendResponse {
+  strategy: string;
+  options: Recommendation[];
 }
 
 export interface StrategyInfo {

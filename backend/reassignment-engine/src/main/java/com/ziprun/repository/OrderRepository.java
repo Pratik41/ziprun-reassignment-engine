@@ -34,4 +34,9 @@ public interface OrderRepository extends JpaRepository<Order, String> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select o from Order o where o.id = :id")
     Optional<Order> findByIdForUpdate(@Param("id") String id);
+
+    /** Orders created with a recommendation on screen (Insights: "recommended pick followed"). */
+    long countByFollowedRecommendationIsNotNull();
+
+    long countByFollowedRecommendation(Boolean followed);
 }

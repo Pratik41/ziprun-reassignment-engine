@@ -184,9 +184,10 @@ Things worth noticing:
 
 ## 4. How an agent is chosen: the routing pipeline
 
-Both callers use the same entry point, `RoutingService.route(order, context)`:
+Every caller uses the same pipeline (`RoutingService.rank(order, context)`):
 - the agentic loop, with a **recovery** context (who failed, the whole stranded batch)
 - the "Get suggestion" button / `POST /orders/{id}/suggest`, with an **initial** context
+- the **New order** dialog / `POST /routing/recommend`, with an initial context and a draft order that isn't saved (see below)
 
 ```mermaid
 flowchart TD
@@ -218,6 +219,31 @@ flowchart TD
 
   This was added after the AI gave 0.95 confidence to the only available agent, who would have ended up with 8 orders.
 - **Timing.** Each routing call is timed, including any AI calls, and the time is stored on the suggestion (`routingMillis`) for the Insights page.
+
+### Recommending an agent for a new order
+
+The New order dialog doesn't make ops guess who has room. When it opens, and again after a pause in typing the description (0.8 s), it calls `POST /routing/recommend`:
+
+```mermaid
+sequenceDiagram
+    participant UI as New order dialog
+    participant API as RoutingController
+    participant RS as RoutingService
+    participant S as Active strategy
+    UI->>API: POST /routing/recommend {description}
+    API->>RS: recommendForNewOrder(description, 3)
+    RS->>S: rank(draft order, initial context)
+    S-->>RS: ranked agents (same guardrails and fallback)
+    RS-->>UI: top 3: agent, confidence, reasoning, source
+    Note over UI: best pick pre-selected,<br/>ops can choose anyone Available
+    UI->>API: POST /orders {description, assignedAgentId, recommendedAgentId}
+    Note over API: order stores recommendedAgentId<br/>+ followedRecommendation
+```
+
+- It is the **same pipeline**: the same candidates, effective load (active + queued suggestions), strategy, AI validation, rule-based fallback and confidence caps. Only the order is a draft with no id and no agent, and **nothing is saved**.
+- With **rule-based**, the lightest effective load comes first. With **AI**, the model also weighs the description (fragile, perishable, documents) but is told to prefer the lowest effective load.
+- A slower answer never overwrites a newer one: typing again cancels the request in flight. Once ops picks an agent themselves, new answers don't move that choice.
+- On create, the order records which agent was recommended and whether ops followed it. Insights shows this as **Recommended pick used** (followed / orders created with a recommendation), and the activity log says "(recommended pick)" or "(recommendation was …)".
 
 ---
 

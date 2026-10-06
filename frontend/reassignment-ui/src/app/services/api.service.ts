@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { Activity, Agent, AgentStatus, MetricsSummary, Order, OrderStatus, StrategyInfo, Suggestion } from '../models';
+import { Activity, Agent, AgentStatus, MetricsSummary, Order, OrderStatus, RecommendResponse, StrategyInfo, Suggestion } from '../models';
 
 export interface SuggestionStreamHandlers {
   start?: (strategy: string) => void;
@@ -40,8 +40,14 @@ export class ApiService {
     return this.http.get<Suggestion[]>(`${this.apiUrl}/suggestions`);
   }
 
-  createOrder(description: string, assignedAgentId: string): Observable<Order> {
-    return this.http.post<Order>(`${this.apiUrl}/orders`, { description, assignedAgentId });
+  /** recommendedAgentId: the top pick shown in the dialog, so Insights can track how often it's followed. */
+  createOrder(description: string, assignedAgentId: string, recommendedAgentId?: string | null): Observable<Order> {
+    return this.http.post<Order>(`${this.apiUrl}/orders`, { description, assignedAgentId, recommendedAgentId: recommendedAgentId ?? null });
+  }
+
+  /** Ranks Available agents for an order that doesn't exist yet. Nothing is saved. */
+  recommendAgents(description: string): Observable<RecommendResponse> {
+    return this.http.post<RecommendResponse>(`${this.apiUrl}/routing/recommend`, { description });
   }
 
   updateOrderStatus(orderId: string, status: OrderStatus): Observable<Order> {

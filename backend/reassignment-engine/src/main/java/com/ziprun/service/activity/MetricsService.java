@@ -2,6 +2,7 @@ package com.ziprun.service.activity;
 
 import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
+import com.ziprun.repository.OrderRepository;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,7 +16,8 @@ import java.util.TreeMap;
 
 /**
  * "Is the AI actually better than rule-based?" Suggestion outcomes grouped by
- * what produced them (AI, rule-based, rule-based standing in for a failed AI).
+ * what produced them (AI, rule-based, rule-based standing in for a failed AI),
+ * plus how often ops follows the recommended agent when creating an order.
  *
  * Acceptance rate = accepted / (accepted + rejected). EXPIRED suggestions were
  * withdrawn by the system, not judged by a person, so they don't count either way.
@@ -28,8 +30,12 @@ public class MetricsService {
                               Long avgRoutingMs, Long p95RoutingMs) {
     }
 
+    /** New orders created with a recommendation on screen, and how many went to the recommended agent. */
+    public record NewOrderPicks(long recommended, long followed, Double followRate) {
+    }
+
     public record Summary(long totalSuggestions, long decided, Double acceptanceRate, Double aiFallbackRate,
-                          Map<String, Long> aiProviders, List<SourceStats> bySource) {
+                          Map<String, Long> aiProviders, List<SourceStats> bySource, NewOrderPicks newOrderPicks) {
     }
 
     private static final Map<String, String> LABELS = new LinkedHashMap<>();
@@ -41,9 +47,11 @@ public class MetricsService {
     }
 
     private final ReassignmentSuggestionRepository suggestions;
+    private final OrderRepository orders;
 
-    public MetricsService(ReassignmentSuggestionRepository suggestions) {
+    public MetricsService(ReassignmentSuggestionRepository suggestions, OrderRepository orders) {
         this.suggestions = suggestions;
+        this.orders = orders;
     }
 
     @Transactional(readOnly = true)
@@ -73,7 +81,13 @@ public class MetricsService {
         long ai = byKind.get("ai").size();
         long fallback = byKind.get("fallback").size();
         return new Summary(all.size(), accepted + rejected, ratio(accepted, accepted + rejected),
-            ratio(fallback, ai + fallback), providers, stats);
+            ratio(fallback, ai + fallback), providers, stats, newOrderPicks());
+    }
+
+    private NewOrderPicks newOrderPicks() {
+        long recommended = orders.countByFollowedRecommendationIsNotNull();
+        long followed = orders.countByFollowedRecommendation(true);
+        return new NewOrderPicks(recommended, followed, ratio(followed, recommended));
     }
 
     static String kind(String source) {

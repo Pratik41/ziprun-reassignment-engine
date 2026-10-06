@@ -55,6 +55,17 @@ public class Order {
     private LocalDateTime slaDeadline;
 
     /**
+     * Agent the recommendation engine suggested when the order was created, and
+     * whether ops went with it. Both null when no recommendation was shown.
+     * Fixed at creation (assignedAgentId moves on reassignment; these don't).
+     */
+    @Column(nullable = true)
+    private String recommendedAgentId;
+
+    @Column(nullable = true)
+    private Boolean followedRecommendation;
+
+    /**
      * Moves the order through its state machine; rejects illegal transitions.
      */
     public void transitionTo(OrderStatus next) {
@@ -102,4 +113,8 @@ public class Order {
 
     public LocalDateTime getSlaDeadline() { return slaDeadline; }
     public void setSlaDeadline(LocalDateTime slaDeadline) { this.slaDeadline = slaDeadline; }
+    public String getRecommendedAgentId() { return recommendedAgentId; }
+    public void setRecommendedAgentId(String recommendedAgentId) { this.recommendedAgentId = recommendedAgentId; }
+    public Boolean getFollowedRecommendation() { return followedRecommendation; }
+    public void setFollowedRecommendation(Boolean followedRecommendation) { this.followedRecommendation = followedRecommendation; }
 }

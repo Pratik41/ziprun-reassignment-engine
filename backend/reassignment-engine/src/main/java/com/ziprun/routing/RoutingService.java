@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   never get nothing because a strategy had a bug
  * - Confidence guardrail for thin rosters / single candidates (applyRosterLimits)
  * - Time each routing call (shown in the Insights metrics)
+ * - Preview rankings for a new order before it exists (recommendForNewOrder)
  *
  * Runtime switchability: the active strategy name lives in an AtomicReference,
  * changed via PUT /routing/strategy and saved in app_settings so it survives
@@ -134,6 +135,17 @@ public class RoutingService {
             order.getId(), context.trigger(), strategyName, candidates.size(),
             results.isEmpty() ? "no recommendation" : results.get(0));
         return results;
+    }
+
+    /**
+     * Ranks agents for an order that hasn't been created yet (the "New order" dialog).
+     * Same strategies, load snapshot and guardrails as a real routing call; nothing is saved.
+     */
+    public List<RoutingResult> recommendForNewOrder(String description, int limit) {
+        Order draft = new Order();
+        draft.setId("NEW-ORDER");
+        draft.setDescription(description == null || description.isBlank() ? "(no description yet)" : description.trim());
+        return rank(draft, RoutingContext.initial()).stream().limit(limit).toList();
     }
 
     public String getActiveStrategyName() {

@@ -35,7 +35,7 @@ import java.util.Map;
  * - Choose the HTTP status for success; errors are mapped by GlobalExceptionHandler
  *
  * Endpoints:
- * POST   /orders              - Create order pre-assigned to an agent (201)
+ * POST   /orders              - Create order pre-assigned to an agent (201); records the recommendation shown, if any
  * GET    /orders?status=      - List orders (optionally filtered by status)
  * GET    /orders/{id}         - Get single order
  * PATCH  /orders/{id}/status  - Update order status (state machine enforced)
@@ -75,7 +75,7 @@ public class OrderController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Order createOrder(@Valid @RequestBody CreateOrderRequest request) {
-        return orderService.createOrder(request.description(), request.assignedAgentId());
+        return orderService.createOrder(request.description(), request.assignedAgentId(), request.recommendedAgentId());
     }
 
     /**
@@ -233,7 +233,9 @@ public class OrderController {
 
     // ============ DTOs ============
 
-    public record CreateOrderRequest(@NotBlank String description, @NotBlank String assignedAgentId) {
+    /** recommendedAgentId: optional, the top pick from POST /routing/recommend that ops was shown. */
+    public record CreateOrderRequest(@NotBlank String description, @NotBlank String assignedAgentId,
+                                     String recommendedAgentId) {
     }
 
     public record UpdateStatusRequest(@NotBlank String status) {

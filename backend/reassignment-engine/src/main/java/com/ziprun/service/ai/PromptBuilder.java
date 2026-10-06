@@ -94,10 +94,11 @@ public final class PromptBuilder {
     }
 
     private static String describeOrder(Order order) {
+        boolean isNew = order.getAssignedAgentId() == null; // a draft from the "New order" dialog
         StringBuilder sb = new StringBuilder()
-            .append("- id: ").append(order.getId()).append('\n')
+            .append("- id: ").append(isNew ? "(not created yet)" : order.getId()).append('\n')
             .append("- description: ").append(order.getDescription()).append('\n')
-            .append("- currently assigned to: ").append(order.getAssignedAgentId());
+            .append("- currently assigned to: ").append(isNew ? "nobody (new order)" : order.getAssignedAgentId());
         if (order.getPickupZone() != null || order.getDropoffZone() != null) {
             sb.append('\n').append("- zones: ").append(order.getPickupZone()).append(" -> ").append(order.getDropoffZone());
         }

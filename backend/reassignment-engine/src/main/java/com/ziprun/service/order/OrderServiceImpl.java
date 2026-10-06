@@ -46,7 +46,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public Order createOrder(String description, String assignedAgentId) {
+    public Order createOrder(String description, String assignedAgentId, String recommendedAgentId) {
         log.debug("Creating order: description={}, agent={}", description, assignedAgentId);
 
         Agent agent = getAgent(assignedAgentId);
@@ -61,6 +61,10 @@ public class OrderServiceImpl implements OrderService {
         order.setAssignedAgentId(assignedAgentId);
         order.setStatus(OrderStatus.ASSIGNED);
         order.setCreatedAt(LocalDateTime.now());
+        if (recommendedAgentId != null && !recommendedAgentId.isBlank()) {
+            order.setRecommendedAgentId(recommendedAgentId);
+            order.setFollowedRecommendation(recommendedAgentId.equals(assignedAgentId));
+        }
         Order saved = orderRepository.save(order);
 
         agent.assignOrder();
@@ -68,9 +72,22 @@ public class OrderServiceImpl implements OrderService {
         log.info("Order created: id={}, agent={}, activeOrders={}",
             saved.getId(), assignedAgentId, agent.getActiveOrderCount());
         activity.record(Activity.Type.ORDER_CREATED, Activity.Actor.OPS,
-            String.format("%s created for %s: %s", saved.getId(), agent.getName(), description),
+            String.format("%s created for %s%s: %s", saved.getId(), agent.getName(),
+                recommendationNote(saved), description),
             saved.getId(), assignedAgentId, null);
         return saved;
+    }
+
+    private String recommendationNote(Order order) {
+        if (order.getFollowedRecommendation() == null) {
+            return "";
+        }
+        if (order.getFollowedRecommendation()) {
+            return " (recommended pick)";
+        }
+        String recommended = agentRepository.findById(order.getRecommendedAgentId())
+            .map(Agent::getName).orElse(order.getRecommendedAgentId());
+        return " (recommendation was " + recommended + ")";
     }
 
     @Override

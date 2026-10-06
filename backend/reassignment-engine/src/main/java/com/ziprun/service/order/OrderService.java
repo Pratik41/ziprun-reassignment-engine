@@ -21,7 +21,14 @@ public interface OrderService {
      * @throws com.ziprun.exception.NotFoundException if the agent doesn't exist
      * @throws com.ziprun.exception.InvalidStateException if the agent is not AVAILABLE
      */
-    Order createOrder(String description, String assignedAgentId);
+    default Order createOrder(String description, String assignedAgentId) {
+        return createOrder(description, assignedAgentId, null);
+    }
+
+    /**
+     * Same, recording the agent the recommendation engine suggested (null if none was shown).
+     */
+    Order createOrder(String description, String assignedAgentId, String recommendedAgentId);
 
     Optional<Order> findById(String orderId);
 
