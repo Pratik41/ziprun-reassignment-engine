@@ -15,7 +15,7 @@ import { ToastService } from '../services/toast.service';
   standalone: true,
   changeDetection: ChangeDetectionStrategy.OnPush,
   template: `
-    <div class="seg" [class.seg-sm]="compact" role="group" [attr.aria-label]="'Status of ' + agent.name">
+    <div class="seg" [class.seg-sm]="compact" [class.seg-stretch]="stretch" role="group" [attr.aria-label]="'Status of ' + agent.name">
       @for (s of statuses; track s) {
         <button type="button"
                 [class.on]="agent.status === s"
@@ -23,12 +23,15 @@ import { ToastService } from '../services/toast.service';
                 [attr.title]="isBlocked(s) ? lastAvailableHint : labels[s].hint"
                 (click)="set(s)">
           <span class="status-dot" [class]="'status-dot ' + s"></span>
-          {{ compact ? short[s] : labels[s].label }}
+          {{ compact && !stretch ? short[s] : labels[s].label }}
         </button>
       }
     </div>
   `,
   styles: [`
+    :host { display: block; min-width: 0; }
+    .seg-stretch { display: flex; width: 100%; }
+    .seg-stretch button { flex: 1; justify-content: center; min-width: 0; }
     .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); }
     .status-dot.AVAILABLE { background: var(--success); }
     .status-dot.BUSY { background: var(--warning); }
@@ -42,6 +45,8 @@ export class AgentStatusControlComponent {
 
   @Input({ required: true }) agent!: Agent;
   @Input() compact = false;
+  /** Fill the available width with equal buttons (never clipped in narrow panels). */
+  @Input() stretch = false;
 
   readonly statuses = AGENT_STATUSES;
   readonly labels = AGENT_STATUS;

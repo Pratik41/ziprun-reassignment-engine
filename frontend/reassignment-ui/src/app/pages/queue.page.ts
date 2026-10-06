@@ -102,8 +102,9 @@ interface Kpi {
     .skeleton-card { padding: 18px; }
     .how-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13px; margin-bottom: 8px; }
     .how ul { margin: 0; padding-left: 18px; color: var(--text-2); font-size: 12.5px; display: flex; flex-direction: column; gap: 4px; }
-    @media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } .side { position: static; } }
+    @media (max-width: 1180px) { .layout { grid-template-columns: minmax(0, 1fr); } .side { position: static; } }
     @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 480px) { .kpis { gap: 10px; } .kpi { padding: 12px; gap: 0; } .kpi-icon { display: none; } .kpi-value { font-size: 20px; } }
   `],
 })
 export class QueuePage {

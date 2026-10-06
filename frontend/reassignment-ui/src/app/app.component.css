@@ -78,3 +78,24 @@
   .topbar, .content { padding-left: 16px; padding-right: 16px; }
   .strategy-label { display: none; }
 }
+
+/* Phones: the sidebar becomes a bottom tab bar so content gets the full width */
+@media (max-width: 640px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed; top: auto; bottom: 0; left: 0; right: 0; z-index: 30;
+    height: auto; flex-direction: row; align-items: center; gap: 0;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.18);
+  }
+  .brand, .nav-section, .conn { display: none; }
+  .nav { flex: 1; flex-direction: row; justify-content: space-around; }
+  .nav-item { width: 52px; height: 44px; }
+  .sidebar-foot { margin-top: 0; }
+  .theme-btn { width: 44px; height: 44px; }
+  .content { padding: 16px 12px 88px; }
+  .topbar { padding: 0 12px; height: 56px; }
+  .offline-banner { margin: 12px 12px 0; }
+  .new-order { padding: 0 12px; }
+  .new-order .btn-label { display: none; }
+}

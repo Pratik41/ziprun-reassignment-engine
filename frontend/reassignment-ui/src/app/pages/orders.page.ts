@@ -99,6 +99,8 @@ type Filter = 'ALL' | OrderStatus;
     .toolbar .tabs { border-bottom: 0; }
     .search { width: 260px; margin: 8px 0; }
     .search .input { height: 32px; }
+    .toolbar .tabs { min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+    @media (max-width: 640px) { .toolbar { padding: 0 12px; } .search { width: 100%; } }
     .strong { font-weight: 600; }
     .small { font-size: 12px; }
     .right { text-align: right; }

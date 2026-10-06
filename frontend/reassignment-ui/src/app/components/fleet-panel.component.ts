@@ -24,20 +24,22 @@ import { IconComponent } from '../ui/icon.component';
       <ul class="agents">
         @for (a of agents(); track a.id) {
           <li class="agent">
-            <app-avatar [agentId]="a.id" [agentName]="a.name" [status]="a.status" size="sm" />
-            <div class="who">
-              <div class="name">
-                {{ a.name }}
-                @if (a.statusNote) {
-                  <span class="note-icon" [attr.title]="a.statusNote"><app-icon name="wifi-off" [size]="12" /></span>
-                }
+            <div class="agent-top">
+              <app-avatar [agentId]="a.id" [agentName]="a.name" [status]="a.status" size="sm" />
+              <div class="who">
+                <div class="name">
+                  {{ a.name }}
+                  @if (a.statusNote) {
+                    <span class="note-icon" [attr.title]="a.statusNote"><app-icon name="wifi-off" [size]="12" /></span>
+                  }
+                </div>
               </div>
               <div class="load" [attr.title]="loadTitle(a.id, a.activeOrderCount)">
                 <div class="meter neutral"><span [style.width.%]="loadPct(a.activeOrderCount)"></span></div>
-                <span class="subtle">{{ a.activeOrderCount }}@if (pending(a.id)) {<span class="pend"> +{{ pending(a.id) }}</span>}</span>
+                <span class="subtle nowrap">{{ a.activeOrderCount }}@if (pending(a.id)) {<span class="pend"> +{{ pending(a.id) }}</span>}</span>
               </div>
             </div>
-            <app-agent-status-control [agent]="a" [compact]="true" />
+            <app-agent-status-control [agent]="a" [compact]="true" [stretch]="true" class="ctl" />
           </li>
         } @empty {
           @for (i of [1, 2, 3, 4]; track i) {
@@ -52,13 +54,15 @@ import { IconComponent } from '../ui/icon.component';
   `,
   styles: [`
     .agents { list-style: none; margin: 0; padding: 6px 8px; }
-    .agent { display: flex; align-items: center; gap: 10px; padding: 8px 6px; border-radius: var(--radius); }
-    .agent app-agent-status-control { flex: none; }
-    .agent:hover { background: var(--surface-hover); }
+    /* Two lines per agent: who + load on top, full-width status buttons below (never clipped) */
+    .agent { display: flex; flex-direction: column; gap: 8px; padding: 10px 8px; border-radius: var(--radius); }
+    .agent + .agent { border-top: 1px solid var(--border); border-radius: 0; }
+    .agent-top { display: flex; align-items: center; gap: 10px; min-width: 0; }
+    .ctl { padding-left: 36px; }
     .who { flex: 1; min-width: 0; }
     .name { font-weight: 500; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .load { display: flex; align-items: center; gap: 8px; font-size: 12px; }
-    .load .meter { flex: 1; max-width: 90px; height: 4px; }
+    .load { display: flex; align-items: center; gap: 8px; font-size: 12px; flex: none; width: 110px; }
+    .load .meter { flex: 1; height: 4px; }
     .pend { color: var(--primary-text); font-weight: 600; }
     .note-icon { display: inline-flex; vertical-align: -1px; margin-left: 4px; color: var(--warning-text); cursor: help; }
     .legend { font-size: 11.5px; padding: 10px 16px; border-top: 1px solid var(--border); }

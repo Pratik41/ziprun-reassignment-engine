@@ -87,7 +87,7 @@ import { IconComponent } from '../ui/icon.component';
     </div>
   `,
   styles: [`
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 16px; }
     .agent { display: flex; flex-direction: column; }
     .agent-head { display: flex; align-items: center; gap: 12px; padding: 16px 18px 12px; }
     .who { flex: 1; min-width: 0; }

@@ -145,6 +145,7 @@ const SOURCE_ICON: Record<string, string> = { ai: 'sparkles', 'rule-based': 'sca
     .event-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; }
     .event-meta .badge { height: 18px; font-size: 11px; }
     @media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 480px) { .kpis { gap: 10px; } .kpi { padding: 12px; gap: 0; } .kpi-icon { display: none; } .kpi-value { font-size: 20px; } }
   `],
 })
 export class InsightsPage implements OnDestroy {
