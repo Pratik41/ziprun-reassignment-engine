@@ -3,6 +3,8 @@ package com.ziprun.service.agent;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
 import java.time.LocalDateTime;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
 
@@ -22,6 +24,9 @@ public interface AgentService {
     Optional<Agent> findById(String agentId);
 
     List<Agent> findAll();
+
+    /** One page of agents, optionally only those in one status. */
+    Page<Agent> list(AgentStatus statusOrNull, Pageable pageable);
 
     /**
      * @param status agent status (AVAILABLE, BUSY, OFFLINE)

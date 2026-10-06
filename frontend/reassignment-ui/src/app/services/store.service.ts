@@ -1,5 +1,5 @@
 import { Injectable, OnDestroy, computed, inject, signal } from '@angular/core';
-import { forkJoin } from 'rxjs';
+import { Observable, forkJoin } from 'rxjs';
 import { Agent, AppConfig, Order, StrategyInfo, Suggestion } from '../models';
 import { ApiService } from './api.service';
 
@@ -11,6 +11,26 @@ import { ApiService } from './api.service';
  * the background re-planning loop appear immediately. If the stream drops, it
  * falls back to polling every few seconds until it reconnects.
  */
+/** Kinds of data the backend reports changes for (GET /events). */
+export type Topic = 'agents' | 'orders' | 'suggestions' | 'settings';
+const ALL_TOPICS: readonly Topic[] = ['agents', 'orders', 'suggestions', 'settings'];
+
+/**
+ * The lists a change event asks the store to re-read. "activity" alone gives none (Insights
+ * reloads its own data); an empty or unreadable event re-reads everything, to be safe.
+ */
+export function topicsOf(data: string): Topic[] {
+  try {
+    const topics: string[] = JSON.parse(data)?.topics ?? [];
+    if (topics.length === 0) {
+      return [...ALL_TOPICS];
+    }
+    return topics.filter((t): t is Topic => (ALL_TOPICS as readonly string[]).includes(t));
+  } catch {
+    return [...ALL_TOPICS];
+  }
+}
+
 /** Soonest deadline first; orders without one last. */
 function byDeadline(a: Order, b: Order): number {
   if (a.slaDeadline === b.slaDeadline) return 0;
@@ -30,7 +50,8 @@ export class StoreService implements OnDestroy {
   private timer: ReturnType<typeof setInterval> | null = null;
   private events: EventSource | null = null;
   private inFlight = false;
-  private refreshAgain = false;
+  /** Topics that changed while a read was in flight: read them right after. */
+  private queued = new Set<Topic>();
 
   readonly agents = signal<Agent[]>([]);
   readonly orders = signal<Order[]>([]);
@@ -143,52 +164,59 @@ export class StoreService implements OnDestroy {
       this.live.set(true);
       this.refresh();
     });
-    this.events.addEventListener('change', () => {
+    this.events.addEventListener('change', (e: MessageEvent) => {
       this.changes.update(n => n + 1);
-      this.refresh();
+      // re-read only what changed: a heartbeat touches "agents", so the other three lists aren't fetched
+      this.refresh(topicsOf(e.data));
     });
     this.events.onerror = () => this.live.set(false);
   }
 
-  refresh(): void {
+  /** Re-reads the given lists (all of them by default, e.g. on start, reconnect or a manual refresh). */
+  refresh(topics: readonly Topic[] = ALL_TOPICS): void {
     if (this.inFlight) {
-      // a change arrived mid-read: read again afterwards so nothing is missed
-      this.refreshAgain = true;
+      // a change arrived mid-read: read it right afterwards so nothing is missed
+      topics.forEach(t => this.queued.add(t));
       return;
     }
     if (!this.config()) {
       this.api.getConfig().subscribe({ next: c => this.config.set(c), error: () => undefined });
     }
+    const wanted = new Set(topics);
+    const calls: Record<string, Observable<unknown>> = {};
+    if (wanted.has('agents')) calls['agents'] = this.api.getAgents();
+    if (wanted.has('orders')) calls['orders'] = this.api.getOrders();
+    if (wanted.has('suggestions')) calls['suggestions'] = this.api.getOpenSuggestions();
+    if (wanted.has('settings')) calls['strategy'] = this.api.getRoutingStrategy();
+    if (Object.keys(calls).length === 0) {
+      return; // e.g. only the activity log changed: Insights reloads that itself
+    }
     this.inFlight = true;
-    forkJoin({
-      agents: this.api.getAgents(),
-      orders: this.api.getOrders(),
-      suggestions: this.api.getSuggestions(),
-      strategy: this.api.getRoutingStrategy(),
-    }).subscribe({
+    forkJoin(calls).subscribe({
       next: data => {
-        this.agents.set(data.agents);
-        this.orders.set(data.orders);
-        this.suggestions.set(data.suggestions);
-        this.strategy.set(data.strategy);
+        if (data['agents']) this.agents.set(data['agents'] as Agent[]);
+        if (data['orders']) this.orders.set(data['orders'] as Order[]);
+        if (data['suggestions']) this.suggestions.set(data['suggestions'] as Suggestion[]);
+        if (data['strategy']) this.strategy.set(data['strategy'] as StrategyInfo);
         this.connection.set('ok');
-        this.loaded.set(true);
+        if (wanted.size === ALL_TOPICS.length) this.loaded.set(true);
         this.lastUpdated.set(new Date());
         this.inFlight = false;
-        this.refreshPending();
+        this.refreshQueued();
       },
       error: () => {
         this.connection.set('error');
         this.inFlight = false;
-        this.refreshPending();
+        this.refreshQueued();
       },
     });
   }
 
-  private refreshPending(): void {
-    if (this.refreshAgain) {
-      this.refreshAgain = false;
-      this.refresh();
+  private refreshQueued(): void {
+    if (this.queued.size) {
+      const next = [...this.queued];
+      this.queued.clear();
+      this.refresh(next);
     }
   }
 

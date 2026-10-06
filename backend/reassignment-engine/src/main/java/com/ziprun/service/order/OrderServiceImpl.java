@@ -3,6 +3,7 @@ package com.ziprun.service.order;
 import com.ziprun.domain.Activity;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
+import com.ziprun.domain.Ids;
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
 import com.ziprun.exception.InvalidStateException;
@@ -19,9 +20,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
  * Order Service Implementation: All order business logic lives here.
@@ -78,7 +80,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         Order order = new Order();
-        order.setId("ORD-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        order.setId(Ids.next("ORD", orderRepository::existsById));
         order.setDescription(description);
         order.setAssignedAgentId(assignedAgentId);
         order.setStatus(OrderStatus.ASSIGNED);
@@ -155,6 +157,12 @@ public class OrderServiceImpl implements OrderService {
     @Transactional(readOnly = true)
     public List<Order> findAll() {
         return orderRepository.findAll();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<Order> list(OrderStatus statusOrNull, Pageable pageable) {
+        return statusOrNull == null ? orderRepository.findAll(pageable) : orderRepository.findByStatus(statusOrNull, pageable);
     }
 
     @Override

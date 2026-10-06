@@ -45,8 +45,9 @@ export class ApiService {
     return this.http.get<Order[]>(`${this.apiUrl}/orders`);
   }
 
-  getSuggestions(): Observable<Suggestion[]> {
-    return this.http.get<Suggestion[]>(`${this.apiUrl}/suggestions`);
+  /** Open (PENDING) suggestions only: all the console needs. History is on the Insights page. */
+  getOpenSuggestions(): Observable<Suggestion[]> {
+    return this.http.get<Suggestion[]>(`${this.apiUrl}/suggestions`, { params: { status: 'PENDING' } });
   }
 
   /** recommendedAgentId: the top pick shown in the dialog, so Insights can track how often it's followed. */

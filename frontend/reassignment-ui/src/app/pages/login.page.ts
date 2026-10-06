@@ -24,6 +24,10 @@ import { IconComponent } from '../ui/icon.component';
 
         <h1>Sign in</h1>
 
+        @if (auth.unreachable()) {
+          <div class="callout tone-warning" role="status"><app-icon name="wifi-off" [size]="14" /><span>Can't reach the backend right now. Check it's running, then sign in.</span></div>
+        }
+
         <div class="field">
           <label for="user">Username</label>
           <input id="user" name="user" class="input" autocomplete="username" required autofocus
@@ -65,7 +69,7 @@ import { IconComponent } from '../ui/icon.component';
   `],
 })
 export class LoginPage {
-  private readonly auth = inject(AuthService);
+  readonly auth = inject(AuthService);
   private readonly router = inject(Router);
   private readonly route = inject(ActivatedRoute);
   readonly theme = inject(ThemeService);

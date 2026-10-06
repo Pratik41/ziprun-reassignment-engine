@@ -3,6 +3,8 @@ package com.ziprun.repository;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -16,6 +18,8 @@ import java.util.List;
 @Repository
 public interface AgentRepository extends JpaRepository<Agent, String> {
     List<Agent> findByStatus(AgentStatus status);
+
+    Page<Agent> findByStatus(AgentStatus status, Pageable pageable);
 
     List<Agent> findByStatusIn(List<AgentStatus> statuses);
 

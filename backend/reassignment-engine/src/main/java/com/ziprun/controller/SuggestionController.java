@@ -4,7 +4,10 @@ import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.exception.NotFoundException;
 import com.ziprun.service.suggestion.SuggestionService;
+import com.ziprun.controller.dto.SuggestionView;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Sort;
 import jakarta.validation.constraints.NotBlank;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
@@ -31,21 +34,23 @@ public class SuggestionController {
     }
 
     @GetMapping
-    public List<ReassignmentSuggestion> listSuggestions(@RequestParam(name = "status", required = false) String status) {
-        if (status == null || status.isBlank()) {
-            return suggestionService.findAll();
-        }
-        return suggestionService.findByStatus(EnumParam.parse(SuggestionStatus.class, status, "suggestion status"));
+    public List<SuggestionView> listSuggestions(@RequestParam(name = "status", required = false) String status,
+                                @RequestParam(name = "page", required = false) Integer page,
+                                @RequestParam(name = "size", required = false) Integer size,
+                                HttpServletResponse response) {
+        SuggestionStatus filter = status == null || status.isBlank() ? null : EnumParam.parse(SuggestionStatus.class, status, "suggestion status");
+        return Paging.respond(suggestionService.list(filter, Paging.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))),
+            SuggestionView::from, response);
     }
 
     @GetMapping("/{id}")
-    public ReassignmentSuggestion getSuggestion(@PathVariable String id) {
-        return suggestionService.findById(id).orElseThrow(() -> new NotFoundException("Suggestion", id));
+    public SuggestionView getSuggestion(@PathVariable String id) {
+        return SuggestionView.from(suggestionService.findById(id).orElseThrow(() -> new NotFoundException("Suggestion", id)));
     }
 
     @PatchMapping("/{id}")
-    public ReassignmentSuggestion updateSuggestion(@PathVariable String id, @Valid @RequestBody UpdateSuggestionRequest request) {
-        return suggestionService.updateStatus(id, EnumParam.parse(SuggestionStatus.class, request.status(), "suggestion status"));
+    public SuggestionView updateSuggestion(@PathVariable String id, @Valid @RequestBody UpdateSuggestionRequest request) {
+        return SuggestionView.from(suggestionService.updateStatus(id, EnumParam.parse(SuggestionStatus.class, request.status(), "suggestion status")));
     }
 
     public record UpdateSuggestionRequest(@NotBlank String status) {

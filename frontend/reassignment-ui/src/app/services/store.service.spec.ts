@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { provideHttpClient } from '@angular/common/http';
 import { provideHttpClientTesting } from '@angular/common/http/testing';
 import { Agent, Order, Suggestion } from '../models';
-import { StoreService } from './store.service';
+import { StoreService, topicsOf } from './store.service';
 
 function agent(id: string, active: number, extra: Partial<Agent> = {}): Agent {
   return { id, name: id, status: 'AVAILABLE', activeOrderCount: active, currentZone: null, maxCapacity: null,
@@ -12,7 +12,7 @@ function agent(id: string, active: number, extra: Partial<Agent> = {}): Agent {
 function order(id: string, extra: Partial<Order> = {}): Order {
   return { id, description: id, assignedAgentId: 'A1', status: 'REASSIGNMENT_PENDING', createdAt: '2026-10-06T09:00:00',
     pickupZone: null, dropoffZone: null, slaDeadline: null, recommendedAgentId: null, followedRecommendation: null,
-    slaAlertedAt: null, ...extra };
+    ...extra };
 }
 
 function suggestion(orderId: string, agentId: string, extra: Partial<Suggestion> = {}): Suggestion {
@@ -72,6 +72,13 @@ describe('StoreService', () => {
       suggestion('stranded', 'A2', { triggerReason: 'SLA_RISK' }),
     ]);
     expect(store.atRiskOrders().map(o => o.id)).toEqual(['risky']);
+  });
+
+  it('re-reads only the lists a change event names', () => {
+    expect(topicsOf('{"topics":["agents"]}')).toEqual(['agents']);
+    expect(topicsOf('{"topics":["orders","suggestions","activity"]}')).toEqual(['orders', 'suggestions']);
+    expect(topicsOf('{"topics":["activity"]}')).toEqual([]); // Insights reloads itself
+    expect(topicsOf('not json')).toEqual(['agents', 'orders', 'suggestions', 'settings']);
   });
 
   it('names zones from the config', () => {

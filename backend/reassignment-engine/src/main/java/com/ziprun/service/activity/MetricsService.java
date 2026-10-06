@@ -1,9 +1,9 @@
 package com.ziprun.service.activity;
 
-import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.repository.OrderRepository;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -11,7 +11,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.TreeMap;
 
 /**
@@ -21,9 +20,15 @@ import java.util.TreeMap;
  *
  * Acceptance rate = accepted / (accepted + rejected). EXPIRED suggestions were
  * withdrawn by the system, not judged by a person, so they don't count either way.
+ *
+ * The database does the counting (GROUP BY source, status), so this costs the same
+ * with 100 suggestions or a million. Only the 95th-percentile response time needs
+ * individual values; it is taken over the latest P95_SAMPLE timed suggestions.
  */
 @Service
 public class MetricsService {
+
+    static final int P95_SAMPLE = 2000;
 
     public record SourceStats(String key, String label, long total, long accepted, long rejected, long expired,
                               long pending, Double acceptanceRate, Double avgConfidence,
@@ -46,6 +51,13 @@ public class MetricsService {
         LABELS.put("unknown", "Before tracking");
     }
 
+    /** Running totals for one kind of source while folding the grouped rows. */
+    private static final class Tally {
+        long total, accepted, rejected, expired, pending, timedCount;
+        double confidenceSum, routingSum;
+        final List<Long> recentTimes = new ArrayList<>();
+    }
+
     private final ReassignmentSuggestionRepository suggestions;
     private final OrderRepository orders;
 
@@ -56,31 +68,49 @@ public class MetricsService {
 
     @Transactional(readOnly = true)
     public Summary summary() {
-        List<ReassignmentSuggestion> all = suggestions.findAll();
-
-        Map<String, List<ReassignmentSuggestion>> byKind = new LinkedHashMap<>();
-        LABELS.keySet().forEach(k -> byKind.put(k, new ArrayList<>()));
+        Map<String, Tally> byKind = new LinkedHashMap<>();
+        LABELS.keySet().forEach(k -> byKind.put(k, new Tally()));
         Map<String, Long> providers = new TreeMap<>();
-        for (ReassignmentSuggestion s : all) {
-            String kind = kind(s.getSource());
-            byKind.get(kind).add(s);
-            if (kind.equals("ai")) {
-                providers.merge(s.getSource().substring(3), 1L, Long::sum);
+
+        // [source, status, count, sum(confidence), count(routingMillis), sum(routingMillis)]
+        for (Object[] row : suggestions.statsBySourceAndStatus()) {
+            String source = (String) row[0];
+            SuggestionStatus status = (SuggestionStatus) row[1];
+            long count = ((Number) row[2]).longValue();
+            String kind = kind(source);
+            Tally t = byKind.get(kind);
+            t.total += count;
+            t.confidenceSum += row[3] == null ? 0 : ((Number) row[3]).doubleValue();
+            t.timedCount += ((Number) row[4]).longValue();
+            t.routingSum += row[5] == null ? 0 : ((Number) row[5]).doubleValue();
+            switch (status) {
+                case ACCEPTED -> t.accepted += count;
+                case REJECTED -> t.rejected += count;
+                case EXPIRED -> t.expired += count;
+                case PENDING -> t.pending += count;
             }
+            if (kind.equals("ai")) {
+                providers.merge(source.substring(3), count, Long::sum);
+            }
+        }
+        // [source, routingMillis], newest first
+        for (Object[] row : suggestions.recentRoutingTimes(PageRequest.of(0, P95_SAMPLE))) {
+            byKind.get(kind((String) row[0])).recentTimes.add(((Number) row[1]).longValue());
         }
 
         List<SourceStats> stats = new ArrayList<>();
-        byKind.forEach((kind, list) -> {
-            if (!list.isEmpty() || !kind.equals("unknown")) {
-                stats.add(stats(kind, list));
+        byKind.forEach((kind, t) -> {
+            if (t.total > 0 || !kind.equals("unknown")) {
+                stats.add(stats(kind, t));
             }
         });
 
-        long accepted = count(all, SuggestionStatus.ACCEPTED);
-        long rejected = count(all, SuggestionStatus.REJECTED);
-        long ai = byKind.get("ai").size();
-        long fallback = byKind.get("fallback").size();
-        return new Summary(all.size(), accepted + rejected, ratio(accepted, accepted + rejected),
+        long total = byKind.values().stream().mapToLong(t -> t.total).sum();
+        long accepted = byKind.values().stream().mapToLong(t -> t.accepted).sum();
+        long rejected = byKind.values().stream().mapToLong(t -> t.rejected).sum();
+        long ai = byKind.get("ai").total;
+        long fallback = byKind.get("fallback").total;
+        return new Summary(total, accepted + rejected, ratio(accepted, accepted + rejected),
             ratio(fallback, ai + fallback), providers, stats, newOrderPicks());
     }
 
@@ -98,22 +128,13 @@ public class MetricsService {
         return "unknown";
     }
 
-    private static SourceStats stats(String kind, List<ReassignmentSuggestion> list) {
-        long accepted = count(list, SuggestionStatus.ACCEPTED);
-        long rejected = count(list, SuggestionStatus.REJECTED);
-        List<Long> times = list.stream().map(ReassignmentSuggestion::getRoutingMillis)
-            .filter(Objects::nonNull).sorted().toList();
-        Double avgConfidence = list.isEmpty() ? null
-            : list.stream().mapToDouble(ReassignmentSuggestion::getConfidence).average().orElse(0);
-        return new SourceStats(kind, LABELS.get(kind), list.size(), accepted, rejected,
-            count(list, SuggestionStatus.EXPIRED), count(list, SuggestionStatus.PENDING),
-            ratio(accepted, accepted + rejected), avgConfidence,
-            times.isEmpty() ? null : Math.round(times.stream().mapToLong(Long::longValue).average().orElse(0)),
+    private static SourceStats stats(String kind, Tally t) {
+        List<Long> times = t.recentTimes.stream().sorted().toList();
+        return new SourceStats(kind, LABELS.get(kind), t.total, t.accepted, t.rejected, t.expired, t.pending,
+            ratio(t.accepted, t.accepted + t.rejected),
+            t.total == 0 ? null : t.confidenceSum / t.total,
+            t.timedCount == 0 ? null : Math.round(t.routingSum / t.timedCount),
             times.isEmpty() ? null : times.get(Math.max(0, (int) Math.ceil(times.size() * 0.95) - 1)));
-    }
-
-    private static long count(List<ReassignmentSuggestion> list, SuggestionStatus status) {
-        return list.stream().filter(s -> s.getStatus() == status).count();
     }
 
     private static Double ratio(long part, long whole) {

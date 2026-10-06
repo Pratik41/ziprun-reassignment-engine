@@ -56,10 +56,12 @@ public class OpenAICompatibleProvider implements LLMProvider {
             onChunk);
     }
 
+    /** JSON mode: the reply is guaranteed to be a JSON object (the prompt gives its shape; it's still validated). */
     private Map<String, Object> requestBody(String prompt) {
         return Map.of(
             "model", model,
             "temperature", 0.2,
+            "response_format", Map.of("type", "json_object"),
             "messages", List.of(Map.of("role", "user", "content", prompt))
         );
     }

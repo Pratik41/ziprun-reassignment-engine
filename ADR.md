@@ -379,6 +379,27 @@ Flyway owns the schema (`db/migration`), Hibernate creates nothing (`ddl-auto=no
 
 ---
 
+## ADR-16: Hardening After a Code Review
+
+**Context**  
+An external review found real failures, not style points: deadlines shown 5½ hours off when the server's time zone differs from the browser's; the sign-in lockout locking *everyone* out behind a proxy; lost updates between concurrent writes (and a drifting order counter); one scheduler thread shared by every timed job; unsafe defaults that could ship; AI prompts logged by default; raw user text in prompts.
+
+**Decisions**
+- **Time zones:** keep `LocalDateTime` in the database (no risky data migration), but serialize every timestamp with the server's UTC offset (`JacksonConfig`). The browser converts it. *Alternative considered:* `Instant` end to end. Cleaner, but it would reinterpret existing rows written in local time.
+- **Concurrency:** `@Version` on agents, orders and suggestions; a conflict is a 409 for people and a retry-next-tick for monitors. Withdrawing suggestions is a conditional bulk `UPDATE` (idempotent, so two withdrawals don't conflict) that still bumps the version so a racing accept fails. *Alternative considered for the counter:* atomic `UPDATE … SET n = n + 1`. The version check covers it with one mechanism.
+- **Client address:** trust `X-Forwarded-For` only as nginx sets it (overwritten, not appended), and keep 8080 off the network in Docker.
+- **Threads:** separate pools for re-planning, streams (no queue, 503 when full) and scheduled jobs.
+- **Profiles:** `dev` by default; Docker runs `prod`, where `ProductionSafetyCheck` fails startup on the default password, sign-in off or the H2 console. INFO logging by default.
+- **API:** response records instead of entities; paged lists; metrics aggregated in SQL; 48-bit collision-checked ids.
+- **AI:** typed text cleaned and fenced in the prompt; JSON mode / response schema on the providers; validation stays the guarantee.
+- **Console:** re-read only the lists a change event names; "backend unreachable" is no longer treated as "signed out".
+
+**Tradeoffs accepted**  
+- Optimistic locking surfaces rare 409s to people instead of silently last-write-wins; the message asks them to try again.
+- Gemini's response schema couldn't be verified live (quota exhausted at the time); a rejection would degrade to Groq, not break routing.
+
+---
+
 ## Summary Table
 
 | ADR | Topic | Decision | Key point |
@@ -398,8 +419,9 @@ Flyway owns the schema (`db/migration`), Hibernate creates nothing (`ddl-auto=no
 | 13 | Live updates | SSE "what changed" events from a JPA listener, after commit | Instant, one source of truth, polling only as fallback |
 | 14 | Security | Session cookie + CSRF, Basic for scripts, agent token for heartbeats | Works with the event stream; no tokens in JavaScript |
 | 15 | Schema | Flyway (idempotent baseline) + PostgreSQL in Docker | Existing databases upgraded in place; no more manual ALTERs |
+| 16 | Hardening | Offsets on timestamps, @Version, real client IP, split pools, prod fail-fast, DTOs, paging | Fixes found by review, each a real failure |
 
 ---
 
 *Document started:* 2026-09-23  
-*Last updated:* 2026-10-06
+*Last updated:* 2026-10-07

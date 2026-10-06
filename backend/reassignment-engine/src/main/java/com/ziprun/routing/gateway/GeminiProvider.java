@@ -62,10 +62,32 @@ public class GeminiProvider implements LLMProvider {
             onChunk);
     }
 
+    /**
+     * Structured output: Gemini is told the reply's MIME type and JSON schema, so it can only answer
+     * in the shape AIAdvisorService parses (the prompt still describes it, and the reply is still
+     * validated). propertyOrdering puts reasoning last, so the streamed reasoning arrives last too.
+     */
+    private static final Map<String, Object> RESPONSE_SCHEMA = Map.of(
+        "type", "OBJECT",
+        "properties", Map.of("recommendations", Map.of(
+            "type", "ARRAY",
+            "items", Map.of(
+                "type", "OBJECT",
+                "properties", Map.of(
+                    "agent_id", Map.of("type", "STRING"),
+                    "confidence", Map.of("type", "NUMBER"),
+                    "reasoning", Map.of("type", "STRING")),
+                "required", List.of("agent_id", "confidence", "reasoning"),
+                "propertyOrdering", List.of("agent_id", "confidence", "reasoning")))),
+        "required", List.of("recommendations"));
+
     private static Map<String, Object> requestBody(String prompt) {
         return Map.of(
             "contents", List.of(Map.of("parts", List.of(Map.of("text", prompt)))),
-            "generationConfig", Map.of("temperature", 0.2)
+            "generationConfig", Map.of(
+                "temperature", 0.2,
+                "responseMimeType", "application/json",
+                "responseSchema", RESPONSE_SCHEMA)
         );
     }
 

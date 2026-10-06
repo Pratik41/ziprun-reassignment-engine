@@ -30,8 +30,6 @@ export interface Order {
   /** Top pick the recommendation engine showed when the order was created (null if none). */
   recommendedAgentId: string | null;
   followedRecommendation: boolean | null;
-  /** When the SLA monitor flagged it as likely to miss slaDeadline. */
-  slaAlertedAt: string | null;
 }
 
 export interface Zone {

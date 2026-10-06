@@ -2,6 +2,8 @@ package com.ziprun.service.order;
 
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
 
@@ -59,6 +61,9 @@ public interface OrderService {
     Order getById(String orderId);
 
     List<Order> findAll();
+
+    /** One page of orders, optionally only those in one status. */
+    Page<Order> list(OrderStatus statusOrNull, Pageable pageable);
 
     List<Order> findByStatus(OrderStatus status);
 

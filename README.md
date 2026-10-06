@@ -67,11 +67,11 @@ An LLM key is optional. Without one, every suggestion comes from the rule-based 
 Needs only Docker (Docker Desktop on Windows/macOS).
 
 ```bash
-cp .env.example .env        # optional: add GEMINI_API_KEY / GROQ_API_KEY
+cp .env.example .env        # then set OPS_PASSWORD (required, 10+ characters); API keys optional
 docker compose up --build
 ```
 
-Open http://localhost:4200 and sign in as **ops** / **ziprun** (set `OPS_USERNAME` / `OPS_PASSWORD` in `.env` to change them; do that before exposing it anywhere). The backend is on http://localhost:8080 and the data lives in PostgreSQL in a Docker volume, so it survives restarts; `docker compose down -v` resets it.
+Open http://localhost:4200 and sign in as **ops** with the `OPS_PASSWORD` you set. Docker runs the backend with the `prod` profile, which **refuses to start** with the default password, sign-in turned off or the H2 console on, so a forgotten default can't ship. The data lives in PostgreSQL in a Docker volume, so it survives restarts; `docker compose down -v` resets it. The backend's port 8080 is only reachable from your own machine; everyone else goes through the UI's nginx.
 
 The UI calls the API on its own address under `/api` (nginx forwards it to the backend), so it also works when opened from another machine or a phone. To point the UI container at a backend somewhere else, set `BACKEND_URL` on the `frontend` service (default `http://backend:8080`).
 
@@ -169,7 +169,9 @@ Everything except `/auth/**` needs a signed-in user: the session cookie from `PO
 | `GET` | `/metrics` | suggestion outcomes per source (AI / rule-based / fallback): acceptance rate, confidence, response time; how often new orders went to the recommended agent |
 | `GET` | `/activity?limit=50` | activity log, newest first: who did what, when (`ops` or `system`) |
 
-Errors always have one shape: `{status, error, message, path, timestamp, details}`, with 400 (bad input), 404 (unknown id) and 409 (conflicts with current state).
+**Lists** (`/orders`, `/agents`, `/suggestions`) take optional `?page=0&size=500` (newest first, max 1000 per page); the body stays a plain array and the total is in the `X-Total-Count` header. **Timestamps** carry their UTC offset (`2026-10-07T14:32:10+05:30`). Responses are dedicated records, not database entities, so internal fields never leak.
+
+Errors always have one shape: `{status, error, message, path, timestamp, details}`, with 400 (bad input), 404 (unknown id), 409 (conflicts with current state, or someone else changed the same thing at the same moment), and 503 (every "Get suggestion" stream slot busy).
 
 ## Configuration
 
@@ -177,7 +179,10 @@ All settings live in `application.properties` and can be overridden with environ
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `OPS_USERNAME` / `OPS_PASSWORD` | `ops` / `ziprun` | the console and API login. **Change the password** before exposing the app; the backend logs a warning while it's the default |
+| `SPRING_PROFILES_ACTIVE` | `dev` | `dev` = laptop defaults allowed. `prod` (Docker) refuses to start with the default/short password, sign-in off or the H2 console on |
+| `OPS_USERNAME` / `OPS_PASSWORD` | `ops` / `ziprun` (dev only) | the console and API login. In `prod` the password must be set and at least 10 characters |
+| `LOG_LEVEL` | `INFO` | `DEBUG` also logs every AI prompt and reply; don't ship that |
+| `DEMO_TOOLS` | on in dev, off in prod | the Fleet page's phone-app simulator |
 | `AGENT_APP_TOKEN` | none | shared secret agents' phone apps send as `X-Agent-Token` on heartbeats; unset = only signed-in users can send them |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:4200` | exact origins allowed to call the API cross-origin (the console itself uses same-origin `/api`); empty = none |
 | `DATABASE_URL` / `DATABASE_USERNAME` / `DATABASE_PASSWORD` | H2 file in `./data` | e.g. `jdbc:postgresql://localhost:5432/ziprun`; Docker Compose sets these |
@@ -231,13 +236,14 @@ Key files (under `backend/reassignment-engine/src/main/java/com/ziprun/`):
 ## Tests
 
 ```bash
-cd backend/reassignment-engine && mvn test                       # 79 backend tests
-cd frontend/reassignment-ui && npx ng test --watch=false        # 26 frontend tests (needs Chrome)
+cd backend/reassignment-engine && mvn test                       # 92 backend tests
+cd frontend/reassignment-ui && npx ng test --watch=false        # 29 frontend tests (needs Chrome)
 ```
 
 All run on every push by GitHub Actions, which also runs the main flow against a real PostgreSQL, builds the Docker images and smoke-tests the running stack (including sign-in). They need no API keys: they use an in-memory database and a test-only fake LLM.
 - **Unit:** rule-based ranking, zone distance and confidence, capacity limits (own, default, queued suggestions, everyone full), AI validation and every fallback path, response parsing, prompt differences, provider chain and circuit breaker, incremental reasoning extraction, saved strategy on restart, thin-roster confidence cap.
-- **Security:** 401 without sign-in, session + CSRF (writes refused without the token), lockout after 5 wrong passwords, HTTP Basic for scripts, the agent-app token works for heartbeats only.
+- **Security:** 401 without sign-in, session + CSRF (writes refused without the token), lockout after 5 wrong passwords, HTTP Basic for scripts, the agent-app token works for heartbeats only; `prod` refuses unsafe settings; typed text can't break out of its place in the AI prompt.
+- **Concurrency and API shape:** a stale copy can't overwrite a newer change (optimistic locking); two withdrawals of the same suggestions don't conflict; responses carry no internal fields; lists are paged; timestamps carry their offset; ids don't collide.
 - **Deadlines, zones, live:** orders get zones and deadlines; an at-risk order gets one suggestion for a faster agent (or stays put); delivering withdraws it; zone and capacity edits change the ranking; change events are pushed after commit.
 - **Frontend:** deadline and label helpers, the store's capacity and queue order, the auth service and 401 handling, and the New order dialog's recommendation flow.
 - **End-to-end** (HTTP + background loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; re-balance when an agent becomes available; recommendation refused if the agent went offline mid-routing; keep with original agent; manual reassign; last Available agent protected; structured errors; async fallback when the AI makes up an agent; SSE streaming, including fallback; heartbeat auto-offline (and manual override); activity log and metrics; new-order recommendations (lighter agent first, nothing saved, followed/overridden recorded).

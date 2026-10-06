@@ -1,11 +1,14 @@
 package com.ziprun.controller;
 
+import com.ziprun.controller.dto.AgentView;
 import com.ziprun.domain.Agent;
 import com.ziprun.domain.AgentStatus;
 import com.ziprun.exception.NotFoundException;
 import com.ziprun.service.agent.AgentService;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
@@ -34,34 +37,35 @@ public class AgentController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public Agent createAgent(@Valid @RequestBody CreateAgentRequest request) {
+    public AgentView createAgent(@Valid @RequestBody CreateAgentRequest request) {
         Agent agent = new Agent();
         agent.setId(request.id());
         agent.setName(request.name());
         agent.setStatus(AgentStatus.AVAILABLE);
         agent.setActiveOrderCount(0);
-        return agentService.save(agent);
+        return AgentView.from(agentService.save(agent));
     }
 
     @GetMapping
-    public List<Agent> listAgents(@RequestParam(name = "status", required = false) String status) {
-        if (status == null || status.isBlank()) {
-            return agentService.findAll();
-        }
-        return agentService.findByStatus(EnumParam.parse(AgentStatus.class, status, "agent status"));
+    public List<AgentView> listAgents(@RequestParam(name = "status", required = false) String status,
+                                @RequestParam(name = "page", required = false) Integer page,
+                                @RequestParam(name = "size", required = false) Integer size,
+                                HttpServletResponse response) {
+        AgentStatus filter = status == null || status.isBlank() ? null : EnumParam.parse(AgentStatus.class, status, "agent status");
+        return Paging.respond(agentService.list(filter, Paging.of(page, size, Sort.by("name"))), AgentView::from, response);
     }
 
     @GetMapping("/{id}")
-    public Agent getAgent(@PathVariable String id) {
-        return agentService.findById(id).orElseThrow(() -> new NotFoundException("Agent", id));
+    public AgentView getAgent(@PathVariable String id) {
+        return AgentView.from(agentService.findById(id).orElseThrow(() -> new NotFoundException("Agent", id)));
     }
 
     /**
      * PATCH /agents/{id}/status - { "status": "OFFLINE" }
      */
     @PatchMapping("/{id}/status")
-    public Agent updateAgentStatus(@PathVariable String id, @Valid @RequestBody UpdateStatusRequest request) {
-        return agentService.updateStatus(id, EnumParam.parse(AgentStatus.class, request.status(), "agent status"));
+    public AgentView updateAgentStatus(@PathVariable String id, @Valid @RequestBody UpdateStatusRequest request) {
+        return AgentView.from(agentService.updateStatus(id, EnumParam.parse(AgentStatus.class, request.status(), "agent status")));
     }
 
     /**
@@ -69,8 +73,8 @@ public class AgentController {
      * Both are replaced: null zone = unknown, null capacity = fleet default.
      */
     @PatchMapping("/{id}")
-    public Agent updateAgent(@PathVariable String id, @RequestBody UpdateAgentRequest request) {
-        return agentService.updateDetails(id, request.currentZone(), request.maxCapacity());
+    public AgentView updateAgent(@PathVariable String id, @RequestBody UpdateAgentRequest request) {
+        return AgentView.from(agentService.updateDetails(id, request.currentZone(), request.maxCapacity()));
     }
 
     /**
@@ -79,8 +83,8 @@ public class AgentController {
      * OFFLINE automatically and their orders are re-planned.
      */
     @PostMapping("/{id}/heartbeat")
-    public Agent heartbeat(@PathVariable String id) {
-        return agentService.heartbeat(id);
+    public AgentView heartbeat(@PathVariable String id) {
+        return AgentView.from(agentService.heartbeat(id));
     }
 
     public record CreateAgentRequest(@NotBlank String id, @NotBlank String name) {

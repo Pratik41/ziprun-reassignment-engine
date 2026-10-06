@@ -18,6 +18,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
 
@@ -64,6 +66,12 @@ public class AgentServiceImpl implements AgentService {
     @Transactional(readOnly = true)
     public List<Agent> findAll() {
         return agentRepository.findAll();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<Agent> list(AgentStatus statusOrNull, Pageable pageable) {
+        return statusOrNull == null ? agentRepository.findAll(pageable) : agentRepository.findByStatus(statusOrNull, pageable);
     }
 
     @Override

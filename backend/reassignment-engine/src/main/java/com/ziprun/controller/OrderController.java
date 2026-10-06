@@ -12,12 +12,16 @@ import com.ziprun.routing.RoutingResult;
 import com.ziprun.routing.RoutingService;
 import com.ziprun.service.order.OrderService;
 import com.ziprun.service.suggestion.SuggestionService;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
+import org.springframework.data.domain.Sort;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import com.ziprun.config.StreamWorkers;
+import com.ziprun.controller.dto.OrderView;
+import com.ziprun.controller.dto.SuggestionView;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -74,9 +78,9 @@ public class OrderController {
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public Order createOrder(@Valid @RequestBody CreateOrderRequest request) {
-        return orderService.createOrder(new OrderService.NewOrder(request.description(), request.assignedAgentId(),
-            request.recommendedAgentId(), request.pickupZone(), request.dropoffZone(), request.slaMinutes()));
+    public OrderView createOrder(@Valid @RequestBody CreateOrderRequest request) {
+        return OrderView.from(orderService.createOrder(new OrderService.NewOrder(request.description(), request.assignedAgentId(),
+            request.recommendedAgentId(), request.pickupZone(), request.dropoffZone(), request.slaMinutes())));
     }
 
     /**
@@ -84,24 +88,26 @@ public class OrderController {
      * Query params: ?status=ASSIGNED | REASSIGNMENT_PENDING | REASSIGNED | DELIVERED
      */
     @GetMapping
-    public List<Order> listOrders(@RequestParam(name = "status", required = false) String status) {
-        if (status == null || status.isBlank()) {
-            return orderService.findAll();
-        }
-        return orderService.findByStatus(EnumParam.parse(OrderStatus.class, status, "order status"));
+    public List<OrderView> listOrders(@RequestParam(name = "status", required = false) String status,
+                                @RequestParam(name = "page", required = false) Integer page,
+                                @RequestParam(name = "size", required = false) Integer size,
+                                HttpServletResponse response) {
+        OrderStatus filter = status == null || status.isBlank() ? null : EnumParam.parse(OrderStatus.class, status, "order status");
+        return Paging.respond(orderService.list(filter, Paging.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"))),
+            OrderView::from, response);
     }
 
     @GetMapping("/{id}")
-    public Order getOrder(@PathVariable String id) {
-        return orderService.getById(id);
+    public OrderView getOrder(@PathVariable String id) {
+        return OrderView.from(orderService.getById(id));
     }
 
     /**
      * PATCH /orders/{id}/status - e.g. { "status": "DELIVERED" }
      */
     @PatchMapping("/{id}/status")
-    public Order updateOrderStatus(@PathVariable String id, @Valid @RequestBody UpdateStatusRequest request) {
-        return orderService.updateStatus(id, EnumParam.parse(OrderStatus.class, request.status(), "order status"));
+    public OrderView updateOrderStatus(@PathVariable String id, @Valid @RequestBody UpdateStatusRequest request) {
+        return OrderView.from(orderService.updateStatus(id, EnumParam.parse(OrderStatus.class, request.status(), "order status")));
     }
 
     /**
@@ -113,8 +119,8 @@ public class OrderController {
      */
     @PostMapping("/{id}/suggest")
     @ResponseStatus(HttpStatus.CREATED)
-    public ReassignmentSuggestion suggestReassignment(@PathVariable String id) {
-        return routeAndPersist(suggestableOrder(id), RoutingContext.initial());
+    public SuggestionView suggestReassignment(@PathVariable String id) {
+        return SuggestionView.from(routeAndPersist(suggestableOrder(id), RoutingContext.initial()));
     }
 
     /**
@@ -152,7 +158,7 @@ public class OrderController {
                     }
                 };
                 ReassignmentSuggestion saved = routeAndPersist(order, RoutingContext.initial().withListener(listener));
-                sse.send("suggestion", saved);
+                sse.send("suggestion", SuggestionView.from(saved));
             } catch (Exception e) {
                 log.warn("Streaming suggestion for order {} failed: {}", id, e.getMessage());
                 sse.send("error", Map.of("message", e.getMessage() == null ? "Suggestion failed" : e.getMessage()));
@@ -220,8 +226,8 @@ public class OrderController {
      * Request: { "newAgentId": "AGT-002" }
      */
     @PostMapping("/{id}/reassign")
-    public Order manualReassign(@PathVariable String id, @Valid @RequestBody ManualReassignRequest request) {
-        return suggestionService.reassignManually(id, request.newAgentId());
+    public OrderView manualReassign(@PathVariable String id, @Valid @RequestBody ManualReassignRequest request) {
+        return OrderView.from(suggestionService.reassignManually(id, request.newAgentId()));
     }
 
     /**
@@ -229,8 +235,8 @@ public class OrderController {
      * order with them (REASSIGNMENT_PENDING -> ASSIGNED) and expire its open suggestions.
      */
     @PostMapping("/{id}/keep")
-    public Order keepWithCurrentAgent(@PathVariable String id) {
-        return suggestionService.keepWithCurrentAgent(id);
+    public OrderView keepWithCurrentAgent(@PathVariable String id) {
+        return OrderView.from(suggestionService.keepWithCurrentAgent(id));
     }
 
     // ============ DTOs ============

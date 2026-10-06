@@ -5,6 +5,8 @@ import com.ziprun.domain.ReassignmentSuggestion;
 import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.domain.TriggerReason;
 import com.ziprun.routing.RoutingResult;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,6 +38,9 @@ public interface SuggestionService {
     Optional<ReassignmentSuggestion> findById(String suggestionId);
 
     List<ReassignmentSuggestion> findAll();
+
+    /** One page of suggestions, optionally only those in one status. */
+    Page<ReassignmentSuggestion> list(SuggestionStatus statusOrNull, Pageable pageable);
 
     List<ReassignmentSuggestion> findByStatus(SuggestionStatus status);
 

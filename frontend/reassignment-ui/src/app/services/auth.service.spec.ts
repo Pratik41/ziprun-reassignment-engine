@@ -41,6 +41,19 @@ describe('AuthService', () => {
     expect(auth.user()).toBeNull();
   });
 
+  it('does not treat an unreachable backend as signed out, and asks again next time', async () => {
+    const first = auth.check();
+    http.expectOne('/api/auth/me').error(new ProgressEvent('error')); // status 0: network down
+    expect(await first).toBeFalse();
+    expect(auth.user()).toBeUndefined();
+    expect(auth.unreachable()).toBeTrue();
+
+    const second = auth.check();
+    http.expectOne('/api/auth/me').flush({ username: 'ops', loginRequired: true });
+    expect(await second).toBeTrue();
+    expect(auth.unreachable()).toBeFalse();
+  });
+
   it('knows when the backend needs no sign-in', async () => {
     const result = auth.check();
     http.expectOne('/api/auth/me').flush({ username: 'ops', loginRequired: false });

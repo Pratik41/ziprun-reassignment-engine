@@ -21,21 +21,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * Optimistic locking, conflict-free withdrawals, and timestamps with an offset.
+ * Hardening: optimistic locking, conflict-free withdrawals, timestamps with an offset,
+ * response records (no internal fields) and pagination.
  */
 @SpringBootTest(properties = {
     "security.enabled=false",
-    "spring.datasource.url=jdbc:h2:mem:concurrency-${random.uuid}",
+    "spring.datasource.url=jdbc:h2:mem:hardening-${random.uuid}",
     "routing.strategy=rule-based",
     "llm.providers=mock"
 })
 @AutoConfigureMockMvc
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
-class ConcurrencyIntegrationTest {
+class ApiHardeningIntegrationTest {
 
     @Autowired MockMvc mvc;
     @Autowired AgentRepository agents;
@@ -77,6 +79,26 @@ class ConcurrencyIntegrationTest {
         assertThat(secondWithdrawal).isZero();
         assertThat(suggestions.findByOrderId("ORD-001"))
             .allSatisfy(s -> assertThat(s.getStatus()).isEqualTo(SuggestionStatus.EXPIRED));
+    }
+
+    @Test
+    void listsArePagedWithTheTotalInAHeader() throws Exception {
+        mvc.perform(get("/orders").param("size", "3"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.length()").value(3))
+            .andExpect(header().string("X-Total-Count", "8"));
+        mvc.perform(get("/orders").param("size", "3").param("page", "2"))
+            .andExpect(jsonPath("$.length()").value(2));
+        // without paging parameters: everything up to the default page size, as before
+        mvc.perform(get("/orders")).andExpect(jsonPath("$.length()").value(8));
+    }
+
+    @Test
+    void responsesDoNotExposeInternalFields() throws Exception {
+        String agent = mvc.perform(get("/agents/AGT-001")).andReturn().getResponse().getContentAsString();
+        String order = mvc.perform(get("/orders/ORD-001")).andReturn().getResponse().getContentAsString();
+        assertThat(agent).contains("\"activeOrderCount\"").doesNotContain("\"version\"");
+        assertThat(order).contains("\"slaDeadline\"").doesNotContain("\"version\"", "\"slaAlertedAt\"");
     }
 
     @Test

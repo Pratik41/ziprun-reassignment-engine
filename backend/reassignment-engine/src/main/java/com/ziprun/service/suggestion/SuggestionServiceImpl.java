@@ -2,6 +2,7 @@ package com.ziprun.service.suggestion;
 
 import com.ziprun.domain.Activity;
 import com.ziprun.domain.AgentStatus;
+import com.ziprun.domain.Ids;
 import com.ziprun.domain.Order;
 import com.ziprun.domain.OrderStatus;
 import com.ziprun.domain.ReassignmentSuggestion;
@@ -22,9 +23,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
  * Suggestion Service Implementation: All suggestion business logic lives here.
@@ -76,7 +78,7 @@ public class SuggestionServiceImpl implements SuggestionService {
         }
 
         ReassignmentSuggestion suggestion = new ReassignmentSuggestion();
-        suggestion.setId("SUGG-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase());
+        suggestion.setId(Ids.next("SUGG", suggestionRepository::existsById));
         suggestion.setOrderId(orderId);
         suggestion.setRecommendedAgentId(result.getRecommendedAgentId());
         suggestion.setConfidence(result.getConfidence());
@@ -127,6 +129,12 @@ public class SuggestionServiceImpl implements SuggestionService {
     @Transactional(readOnly = true)
     public List<ReassignmentSuggestion> findAll() {
         return suggestionRepository.findAll();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ReassignmentSuggestion> list(SuggestionStatus statusOrNull, Pageable pageable) {
+        return statusOrNull == null ? suggestionRepository.findAll(pageable) : suggestionRepository.findByStatus(statusOrNull, pageable);
     }
 
     @Override

@@ -1,6 +1,6 @@
 package com.ziprun.controller;
 
-import com.ziprun.domain.Activity;
+import com.ziprun.controller.dto.ActivityView;
 import com.ziprun.service.activity.ActivityService;
 import com.ziprun.service.activity.MetricsService;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -27,8 +27,8 @@ public class InsightsController {
     }
 
     @GetMapping("/activity")
-    public List<Activity> activity(@RequestParam(name = "limit", defaultValue = "50") int limit) {
-        return activityService.recent(limit);
+    public List<ActivityView> activity(@RequestParam(name = "limit", defaultValue = "50") int limit) {
+        return activityService.recent(limit).stream().map(ActivityView::from).toList();
     }
 
     @GetMapping("/metrics")

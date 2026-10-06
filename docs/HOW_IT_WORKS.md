@@ -24,6 +24,7 @@ Code paths are relative to `backend/reassignment-engine/src/main/java/com/ziprun
 17. [Live updates](#17-live-updates)
 18. [Sign-in and security](#18-sign-in-and-security)
 19. [The database and migrations](#19-the-database-and-migrations)
+20. [Hardening: concurrency, time zones, safe defaults](#20-hardening-concurrency-time-zones-safe-defaults)
 
 ---
 
@@ -610,6 +611,9 @@ Honest list of what isn't solved yet (most are on the Roadmap in the README):
 | The console keeps returning to Sign in | The session expired (12 h) or the backend restarted | Sign in again; sessions live in the backend's memory |
 | Sign-in says "Too many failed sign-ins" | 5 wrong passwords from your address | Wait 10 minutes |
 | curl gets 401 | The API needs a user now | Add `-u ops:ziprun` (or your `OPS_USERNAME:OPS_PASSWORD`) |
+| "Someone else changed this at the same moment" (409) | Two changes hit the same agent, order or suggestion at once; optimistic locking refused the second | Try again; the screen already shows the latest state |
+| `docker compose up` says "Set OPS_PASSWORD" or the backend logs "Refusing to start" | The prod profile won't run with the default/short password, sign-in off or the H2 console on | Put `OPS_PASSWORD=` (10+ characters) in `.env` |
+| The sign-in page says it can't reach the backend | The backend is down or restarting (this isn't "signed out") | Start it; the next sign-in attempt checks again |
 | The sidebar says "Updating every 3s" instead of "Live" | The live stream (`/events`) dropped; the console fell back to polling | It reconnects by itself; check a proxy isn't buffering `text/event-stream` |
 
 ---
@@ -740,5 +744,69 @@ sequenceDiagram
 | `V1__baseline_schema.sql` | all tables. Idempotent (`IF NOT EXISTS`) so it also upgrades databases created before migrations existed, which are baselined at version 0; converts H2's native ENUM columns to VARCHAR so new enum values (like `SLA_RISK`) need no manual `ALTER` |
 | `V2__seed_sample_data.sql` | the 5 sample agents and 8 orders, only into an empty database |
 | `V3__zones_capacity_deadlines.sql` | `orders.sla_alerted_at`, and zones for the sample data (only rows still exactly as seeded) |
+| `V4__optimistic_locking.sql` | a `version` column on agents, orders and suggestions ([section 20](#20-hardening-concurrency-time-zones-safe-defaults)) |
 
-To change the schema, add `V4__what_it_does.sql`. Keep it valid on both H2 and PostgreSQL: `ADD COLUMN IF NOT EXISTS`, `ALTER COLUMN … SET DATA TYPE`, and standard types work on both.
+To change the schema, add `V5__what_it_does.sql`. Keep it valid on both H2 and PostgreSQL: `ADD COLUMN IF NOT EXISTS`, `ALTER COLUMN … SET DATA TYPE`, and standard types work on both.
+
+---
+
+## 20. Hardening: concurrency, time zones, safe defaults
+
+These came out of a code review. Each fixed a real failure, not a style point.
+
+### Two changes at once (optimistic locking)
+
+Agents, orders and suggestions carry a `version` (`@Version`). Every update checks the row still has the version it was read with:
+
+```mermaid
+sequenceDiagram
+    participant H as Heartbeat (request A)
+    participant O as Ops sets Busy (request B)
+    participant DB as Database
+    H->>DB: read agent (AVAILABLE, version 7)
+    O->>DB: read agent (AVAILABLE, version 7)
+    O->>DB: UPDATE … status=BUSY WHERE version=7 → version 8 ✓
+    H->>DB: UPDATE … lastHeartbeat=… WHERE version=7 → 0 rows
+    Note over H: refused (409 / retried next tick)<br/>instead of writing AVAILABLE back over BUSY
+```
+
+The same check stops **`activeOrderCount` drifting**: two accepts that both read "4 orders" can't both write "5".
+
+**Withdrawing suggestions** is different on purpose: it's one conditional `UPDATE … SET status='EXPIRED' WHERE status='PENDING'`. Ops pressing "Keep" while a background re-balance withdraws the same suggestions is not a conflict (both want "expired"), so it simply succeeds twice. The version is still bumped, so an *accept* racing a withdrawal fails its check rather than accepting an expired suggestion.
+
+### Time zones
+
+Timestamps are stored as the server's local time and leave the API **with the server's UTC offset** (`2026-10-07T14:32:10+05:30`, or `…Z` in a UTC container). The browser converts that to its own zone. Before, a UTC Docker backend and a browser in India showed every deadline 5½ hours off.
+
+### The real client address
+
+The sign-in lockout counts failures per client address. Behind nginx (or the dev proxy) every request used to look like it came from the proxy, so 5 wrong passwords from anyone locked everyone out. Now:
+- the backend reads `X-Forwarded-For` (`server.forward-headers-strategy=framework`);
+- nginx **overwrites** that header with the real address, so a client can't pass in a fake one;
+- Docker binds the backend's port 8080 to localhost, so nobody can bypass nginx and set the header themselves.
+
+### Threads
+
+| Pool | Used by | Size |
+|---|---|---|
+| `applicationTaskExecutor` | the re-planning loop (`@Async`) | 4 running, up to 8, queue 200 |
+| `StreamWorkers` | "Get suggestion" streams | 4–16, **no queue**: when full, 503 at once instead of a stream that looks frozen |
+| scheduler | heartbeat check, deadline check, live-update keep-alives | 3, so a deadline check waiting on the AI can't delay the heartbeat check |
+
+### Safe defaults
+
+- Runs without a profile are `dev` (laptop defaults allowed). Docker runs `prod`, where `ProductionSafetyCheck` **refuses to start** with the default or a short password, `security.enabled=false`, or the H2 console on.
+- Logging is `INFO`; `LOG_LEVEL=DEBUG` adds every AI prompt and reply.
+- The phone-app simulator is a demo tool: shown in dev, hidden in prod unless `DEMO_TOOLS=true`.
+
+### AI input and output
+
+- **Prompt injection:** order descriptions and agent names are cleaned (no line breaks, angle brackets or table pipes; length capped), descriptions sit inside `<order_description>` tags, and the prompt says that text is data, never instructions. The hard guarantee is still the roster check: the model can only ever pick a real, available agent, and a person approves the move.
+- **Structured output:** Groq runs in JSON mode (`response_format: json_object`, verified live). Gemini gets a JSON schema (`responseMimeType` + `responseSchema`); if it ever rejected that, it would fail like any other Gemini error and Groq would answer. The text parser and validation stay as the safety net.
+
+### API shape
+
+- Responses are dedicated records (`controller/dto/*View`), not the database entities: no `version` or `slaAlertedAt` in the JSON, and tables can change without changing the API.
+- Lists are paged (`?page&size`, total in `X-Total-Count`). The console only loads **open** suggestions, and Insights counts in the database (`GROUP BY`) instead of loading every suggestion.
+- The console re-reads only what a change event names: a heartbeat refreshes agents, not all four lists.
+- Ids are 12 hex digits (48 bits) and checked against the table before use; 8 digits would likely collide somewhere past ~77,000 orders.

@@ -21,16 +21,30 @@ export class AuthService {
   /** False when the backend runs with security disabled (no sign-in needed, no sign-out shown). */
   readonly loginRequired = signal(true);
 
-  /** Asks the backend once; later calls reuse the answer. */
+  /** True when the last check couldn't reach the backend at all (not the same as "signed out"). */
+  readonly unreachable = signal(false);
+
+  /**
+   * Asks the backend once; later calls reuse the answer. Only a 401 means "signed out".
+   * If the backend can't be reached (down, restarting, network), nothing is remembered,
+   * so the next navigation asks again instead of treating the user as logged out.
+   */
   check(): Promise<boolean> {
     if (this.user() !== undefined) {
       return Promise.resolve(this.user() !== null);
     }
     return firstValueFrom(this.http.get<Me>('/api/auth/me').pipe(
-      tap(me => this.signedIn(me)),
+      tap(me => {
+        this.unreachable.set(false);
+        this.signedIn(me);
+      }),
       map(() => true),
-      catchError(() => {
-        this.user.set(null);
+      catchError((err: unknown) => {
+        const signedOut = err instanceof HttpErrorResponse && err.status === 401;
+        this.unreachable.set(!signedOut);
+        if (signedOut) {
+          this.user.set(null);
+        }
         return of(false);
       }),
     ));

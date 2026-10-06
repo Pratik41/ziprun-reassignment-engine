@@ -9,12 +9,16 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import java.time.LocalDateTime;
 import java.util.List;
 
 @Repository
 public interface ReassignmentSuggestionRepository extends JpaRepository<ReassignmentSuggestion, String> {
     List<ReassignmentSuggestion> findByStatus(SuggestionStatus status);
+
+    Page<ReassignmentSuggestion> findByStatus(SuggestionStatus status, Pageable pageable);
 
     List<ReassignmentSuggestion> findByOrderId(String orderId);
 
@@ -42,6 +46,16 @@ public interface ReassignmentSuggestionRepository extends JpaRepository<Reassign
     @Query("select s.recommendedAgentId, count(s) from ReassignmentSuggestion s " +
            "where s.status = com.ziprun.domain.SuggestionStatus.PENDING group by s.recommendedAgentId")
     List<Object[]> countPendingByRecommendedAgent();
+
+    /** Insights: [source, status, count, sum(confidence), count(routingMillis), sum(routingMillis)]. */
+    @Query("select s.source, s.status, count(s), sum(s.confidence), count(s.routingMillis), sum(s.routingMillis) "
+         + "from ReassignmentSuggestion s group by s.source, s.status")
+    List<Object[]> statsBySourceAndStatus();
+
+    /** Insights p95: [source, routingMillis] of the latest timed suggestions, newest first. */
+    @Query("select s.source, s.routingMillis from ReassignmentSuggestion s where s.routingMillis is not null "
+         + "order by s.createdAt desc")
+    List<Object[]> recentRoutingTimes(Pageable page);
 
     /*
      * Withdrawing suggestions (PENDING -> EXPIRED) is one conditional UPDATE, not load-modify-save:
