@@ -1,6 +1,7 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, computed, effect, inject, signal, untracked } from '@angular/core';
 import { RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { ApiService, errorMessage } from './services/api.service';
+import { AuthService } from './services/auth.service';
 import { StoreService } from './services/store.service';
 import { ThemeService } from './services/theme.service';
 import { ToastService } from './services/toast.service';
@@ -24,6 +25,7 @@ const STRATEGY_INFO: Record<string, { label: string; icon: string; hint: string 
 })
 export class AppComponent {
   readonly store = inject(StoreService);
+  readonly auth = inject(AuthService);
   readonly theme = inject(ThemeService);
   private readonly api = inject(ApiService);
   private readonly toast = inject(ToastService);
@@ -32,6 +34,12 @@ export class AppComponent {
   readonly switching = signal(false);
 
   readonly strategies = computed(() => this.store.strategy()?.available ?? ['ai', 'rule-based']);
+
+  /** Data flows only while someone is signed in. */
+  private readonly session = effect(() => {
+    const signedIn = !!this.auth.user();
+    untracked(() => (signedIn ? this.store.start() : this.store.stop()));
+  });
 
   info(name: string) {
     return STRATEGY_INFO[name] ?? { label: name, icon: 'activity', hint: name };

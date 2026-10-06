@@ -26,6 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @EnabledIfEnvironmentVariable(named = "POSTGRES_TEST_URL", matches = ".+")
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=${POSTGRES_TEST_URL}",
     "spring.datasource.username=${POSTGRES_TEST_USER:ziprun}",
     "spring.datasource.password=${POSTGRES_TEST_PASSWORD:ziprun}",

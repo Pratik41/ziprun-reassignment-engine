@@ -23,6 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Seed: Rahul (AGT-002) and Kiran (AGT-004) are the only AVAILABLE agents, both with 0 orders.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:recommend-${random.uuid}",
     "routing.strategy=rule-based",
     "llm.providers=mock"

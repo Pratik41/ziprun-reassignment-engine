@@ -21,6 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * GET /events pushes a change event after data is committed, naming what changed.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:live-${random.uuid}",
     "routing.strategy=rule-based",
     "llm.providers=mock"

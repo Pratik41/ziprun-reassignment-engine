@@ -33,6 +33,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * only AVAILABLE agents, both with 0 orders. The monitor is invoked directly here.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:sla-${random.uuid}",
     "routing.strategy=rule-based",
     "llm.providers=mock",

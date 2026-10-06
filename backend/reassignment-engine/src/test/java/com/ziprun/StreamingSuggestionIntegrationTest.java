@@ -22,6 +22,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * POST /orders/{id}/suggest/stream end to end with the mock LLM streaming in small chunks.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:stream-${random.uuid}",
     "routing.strategy=ai",
     "llm.providers=mock",

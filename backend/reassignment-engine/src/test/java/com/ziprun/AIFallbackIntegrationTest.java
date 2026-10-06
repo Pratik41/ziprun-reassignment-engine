@@ -21,6 +21,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * queue (rule-based) suggestions instead of silently dropping them.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:fallback-${random.uuid}",
     "routing.strategy=ai",
     "llm.providers=mock",

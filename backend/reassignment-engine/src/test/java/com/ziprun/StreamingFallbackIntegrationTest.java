@@ -16,6 +16,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * still ends with a rule-based suggestion.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:stream-fallback-${random.uuid}",
     "routing.strategy=ai",
     "llm.providers=mock",

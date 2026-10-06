@@ -11,6 +11,11 @@ export interface SuggestionStreamHandlers {
   error: (message: string) => void;
 }
 
+function readCookie(name: string): string | null {
+  const match = document.cookie.split('; ').find(c => c.startsWith(name + '='));
+  return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
+}
+
 /** The server's message from an error response ({status, error, message, ...}), or a fallback. */
 export function errorMessage(err: unknown, fallback = 'Something went wrong'): string {
   if (err instanceof HttpErrorResponse) {
@@ -119,7 +124,9 @@ export class ApiService {
       try {
         const response = await fetch(`${this.apiUrl}/orders/${orderId}/suggest/stream`, {
           method: 'POST',
-          headers: { Accept: 'text/event-stream' },
+          // fetch isn't HttpClient, so echo the CSRF cookie ourselves
+          headers: { Accept: 'text/event-stream', 'X-XSRF-TOKEN': readCookie('XSRF-TOKEN') ?? '' },
+          credentials: 'same-origin',
           signal: controller.signal,
         });
         if (!response.ok || !response.body) {

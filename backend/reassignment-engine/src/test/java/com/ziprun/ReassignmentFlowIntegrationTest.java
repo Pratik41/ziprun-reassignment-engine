@@ -39,6 +39,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Seed (data.sql): AGT-001 Priya has ORD-001/002/008; AGT-002 and AGT-004 are the only AVAILABLE agents.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:flow-${random.uuid}",
     "routing.strategy=ai",
     "llm.providers=mock"

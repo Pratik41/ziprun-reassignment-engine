@@ -79,14 +79,17 @@ jobs:
         run: |
           docker compose up -d
           for i in $(seq 1 60); do
-            if curl -sf localhost:8080/agents >/dev/null && curl -sf localhost:4200/queue >/dev/null; then break; fi
+            if curl -sf -u ops:ziprun localhost:8080/agents >/dev/null && curl -sf localhost:4200/queue >/dev/null; then break; fi
             sleep 3
           done
-          curl -sf localhost:8080/agents | grep -q '"AGT-001"'
-          curl -sf localhost:8080/routing/strategy
+          # the API needs sign-in now; scripts use HTTP Basic (compose default ops / ziprun)
+          AUTH="-u ops:ziprun"
+          curl -s -o /dev/null -w "%{http_code}" localhost:8080/agents | grep -q 401
+          curl -sf $AUTH localhost:8080/agents | grep -q '"AGT-001"'
+          curl -sf $AUTH localhost:8080/routing/strategy
           curl -sf localhost:4200/queue | grep -q '<app-root>'
           # the UI reaches the API through nginx on its own origin
-          curl -sf localhost:4200/api/agents | grep -q '"AGT-001"'
+          curl -sf $AUTH localhost:4200/api/agents | grep -q '"AGT-001"'
           echo "Backend and UI are up"
       - name: Container logs
         if: always()

@@ -27,7 +27,7 @@ export class StoreService implements OnDestroy {
   static readonly LIVE_RESYNC_MS = 60000;
 
   private readonly api = inject(ApiService);
-  private readonly timer: ReturnType<typeof setInterval>;
+  private timer: ReturnType<typeof setInterval> | null = null;
   private events: EventSource | null = null;
   private inFlight = false;
   private refreshAgain = false;
@@ -99,7 +99,11 @@ export class StoreService implements OnDestroy {
     return map;
   });
 
-  constructor() {
+  /** Begin loading and listening (after sign-in). Safe to call twice. */
+  start(): void {
+    if (this.timer) {
+      return;
+    }
     this.refresh();
     this.connectLive();
     this.timer = setInterval(() => {
@@ -110,9 +114,23 @@ export class StoreService implements OnDestroy {
     }, StoreService.POLL_MS);
   }
 
-  ngOnDestroy(): void {
-    clearInterval(this.timer);
+  /** Stop and forget everything (sign-out). */
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     this.events?.close();
+    this.events = null;
+    this.live.set(false);
+    this.loaded.set(false);
+    this.agents.set([]);
+    this.orders.set([]);
+    this.suggestions.set([]);
+  }
+
+  ngOnDestroy(): void {
+    this.stop();
   }
 
   /** EventSource reconnects by itself after an error; we re-read on every (re)connect to catch up. */

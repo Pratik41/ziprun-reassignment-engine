@@ -25,6 +25,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Seed: Rahul (AGT-002) and Kiran (AGT-004) AVAILABLE; Priya (AGT-001) BUSY with 3 orders.
  */
 @SpringBootTest(properties = {
+    "security.enabled=false",
     "spring.datasource.url=jdbc:h2:mem:heartbeat-${random.uuid}",
     "llm.providers=mock",
     "agents.heartbeat.timeout-seconds=1",
