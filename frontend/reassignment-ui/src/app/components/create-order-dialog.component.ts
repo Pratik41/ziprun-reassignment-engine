@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, DestroyRef, EventEmitter, Input, Output, computed, inject, signal } from '@angular/core';
 import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
-import { Subject, catchError, debounceTime, distinctUntilChanged, map, of, switchMap, tap } from 'rxjs';
+import { Subject, catchError, distinctUntilChanged, map, of, switchMap, tap, timer } from 'rxjs';
 import { Recommendation } from '../models';
 import { confidenceLevel, percent, sourceInfo } from '../labels';
 import { ApiService, errorMessage } from '../services/api.service';
@@ -248,7 +248,8 @@ export class CreateOrderDialogComponent {
   constructor() {
     this.requests.pipe(
       // opening or picking a zone asks straight away; typing waits for a pause
-      switchMap(req => req.force ? of(req) : of(req).pipe(debounceTime(CreateOrderDialogComponent.DEBOUNCE_MS))),
+      // (a timer, not debounceTime on of(): that would emit as soon as of() completes)
+      switchMap(req => req.force ? of(req) : timer(CreateOrderDialogComponent.DEBOUNCE_MS).pipe(map(() => req))),
       map(req => ({ ...req, text: req.text.trim() })),
       distinctUntilChanged((prev, next) => !next.force && prev.text === next.text
         && prev.pickup === next.pickup && prev.dropoff === next.dropoff),
