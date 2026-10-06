@@ -28,7 +28,7 @@ describe('StoreService', () => {
     TestBed.configureTestingModule({ providers: [provideHttpClient(), provideHttpClientTesting()] });
     store = TestBed.inject(StoreService);
     store.config.set({ defaultMaxCapacity: 4, defaultSlaMinutes: 120, slaAtRiskMinutes: 30,
-      zones: [{ id: 'KORAMANGALA', name: 'Koramangala', neighbours: [] }] });
+      zones: [{ id: 'KORAMANGALA', name: 'Koramangala', neighbours: [] }], demoTools: false });
   });
 
   it('measures load (active + queued suggestions) against the agent\'s or the fleet\'s capacity', () => {

@@ -18,21 +18,25 @@ public class ConfigController {
     private final RoutingService routingService;
     private final int defaultSlaMinutes;
     private final int slaAtRiskMinutes;
+    private final boolean demoTools;
 
     public ConfigController(RoutingService routingService,
                             @Value("${orders.default-sla-minutes:120}") int defaultSlaMinutes,
-                            @Value("${orders.sla.at-risk-minutes:30}") int slaAtRiskMinutes) {
+                            @Value("${orders.sla.at-risk-minutes:30}") int slaAtRiskMinutes,
+                            @Value("${app.demo-tools:false}") boolean demoTools) {
         this.routingService = routingService;
         this.defaultSlaMinutes = defaultSlaMinutes;
         this.slaAtRiskMinutes = slaAtRiskMinutes;
+        this.demoTools = demoTools;
     }
 
     @GetMapping("/config")
     public AppConfig config() {
-        return new AppConfig(routingService.getDefaultCapacity(), defaultSlaMinutes, slaAtRiskMinutes, Zones.all());
+        return new AppConfig(routingService.getDefaultCapacity(), defaultSlaMinutes, slaAtRiskMinutes, Zones.all(), demoTools);
     }
 
-    /** defaultMaxCapacity 0 = no limit. */
-    public record AppConfig(int defaultMaxCapacity, int defaultSlaMinutes, int slaAtRiskMinutes, List<Zones.Zone> zones) {
+    /** defaultMaxCapacity 0 = no limit. demoTools: show the phone-app simulator on the Fleet page. */
+    public record AppConfig(int defaultMaxCapacity, int defaultSlaMinutes, int slaAtRiskMinutes, List<Zones.Zone> zones,
+                            boolean demoTools) {
     }
 }

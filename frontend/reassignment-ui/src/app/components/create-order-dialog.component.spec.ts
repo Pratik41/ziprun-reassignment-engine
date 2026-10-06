@@ -26,7 +26,7 @@ describe('CreateOrderDialogComponent', () => {
     });
     const store = TestBed.inject(StoreService);
     store.agents.set([agent('A1', 0), agent('A2', 3)]);
-    store.config.set({ defaultMaxCapacity: 6, defaultSlaMinutes: 120, slaAtRiskMinutes: 30, zones: [] });
+    store.config.set({ defaultMaxCapacity: 6, defaultSlaMinutes: 120, slaAtRiskMinutes: 30, zones: [], demoTools: false });
     http = TestBed.inject(HttpTestingController);
     fixture = TestBed.createComponent(CreateOrderDialogComponent);
     dialog = fixture.componentInstance;

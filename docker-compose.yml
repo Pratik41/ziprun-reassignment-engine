@@ -27,6 +27,8 @@ services:
       # X-Forwarded-For; exposing 8080 directly would let a client fake that header
       - "127.0.0.1:8080:8080"
     environment:
+      # prod: the backend refuses to start with the default password, sign-in off or the H2 console on
+      SPRING_PROFILES_ACTIVE: prod
       DATABASE_URL: jdbc:postgresql://db:5432/ziprun
       DATABASE_USERNAME: ziprun
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-ziprun}
@@ -34,8 +36,10 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       ROUTING_STRATEGY: ${ROUTING_STRATEGY:-ai}
       OPS_USERNAME: ${OPS_USERNAME:-ops}
-      OPS_PASSWORD: ${OPS_PASSWORD:-ziprun}
+      OPS_PASSWORD: ${OPS_PASSWORD:?Set OPS_PASSWORD in .env (at least 10 characters), see .env.example}
       AGENT_APP_TOKEN: ${AGENT_APP_TOKEN:-}
+      DEMO_TOOLS: ${DEMO_TOOLS:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       AGENTS_HEARTBEAT_TIMEOUT_SECONDS: ${AGENTS_HEARTBEAT_TIMEOUT_SECONDS:-60}
     depends_on:
       db:

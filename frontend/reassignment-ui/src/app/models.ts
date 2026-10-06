@@ -47,6 +47,8 @@ export interface AppConfig {
   defaultSlaMinutes: number;
   slaAtRiskMinutes: number;
   zones: Zone[];
+  /** Show demo tools (the Fleet page's phone-app simulator): dev, or DEMO_TOOLS=true. */
+  demoTools: boolean;
 }
 
 export interface NewOrderRequest {

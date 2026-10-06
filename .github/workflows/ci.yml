@@ -74,16 +74,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # the prod profile needs a real password (and refuses the default)
+      - run: echo "OPS_PASSWORD=ci-smoke-test-password" > .env
       - run: docker compose build
       - name: Start the stack and check both apps answer
         run: |
           docker compose up -d
           for i in $(seq 1 60); do
-            if curl -sf -u ops:ziprun localhost:8080/agents >/dev/null && curl -sf localhost:4200/queue >/dev/null; then break; fi
+            if curl -sf -u ops:ci-smoke-test-password localhost:8080/agents >/dev/null && curl -sf localhost:4200/queue >/dev/null; then break; fi
             sleep 3
           done
-          # the API needs sign-in now; scripts use HTTP Basic (compose default ops / ziprun)
-          AUTH="-u ops:ziprun"
+          # the API needs sign-in; scripts use HTTP Basic
+          AUTH="-u ops:ci-smoke-test-password"
           curl -s -o /dev/null -w "%{http_code}" localhost:8080/agents | grep -q 401
           curl -sf $AUTH localhost:8080/agents | grep -q '"AGT-001"'
           curl -sf $AUTH localhost:8080/routing/strategy

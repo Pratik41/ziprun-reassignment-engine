@@ -92,10 +92,13 @@ import { IconComponent } from '../ui/icon.component';
             <div class="app-row" [class.live]="sim.isConnected(a.id)">
               <app-icon [name]="sim.isConnected(a.id) ? 'activity' : 'wifi-off'" [size]="14" />
               <span class="grow">{{ appStatus(a) }}</span>
-              <button class="btn btn-ghost btn-sm" (click)="toggleApp(a)"
-                      [attr.title]="sim.isConnected(a.id) ? 'Stop sending heartbeats' : 'Simulate this agent\\'s phone app sending heartbeats'">
-                {{ sim.isConnected(a.id) ? 'Disconnect app' : 'Connect app' }}
-              </button>
+              <!-- the simulator is a demo tool: shown only when the backend allows it (dev, or DEMO_TOOLS=true) -->
+              @if (store.config()?.demoTools) {
+                <button class="btn btn-ghost btn-sm" (click)="toggleApp(a)"
+                        [attr.title]="sim.isConnected(a.id) ? 'Stop sending heartbeats' : 'Simulate this agent\\'s phone app sending heartbeats'">
+                  {{ sim.isConnected(a.id) ? 'Disconnect app' : 'Connect app' }}
+                </button>
+              }
             </div>
 
             <footer class="agent-foot">
