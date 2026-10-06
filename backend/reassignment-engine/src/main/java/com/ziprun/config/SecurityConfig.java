@@ -16,6 +16,7 @@ import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.config.ObjectPostProcessor;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -27,6 +28,7 @@ import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
+import org.springframework.security.web.header.HeaderWriterFilter;
 import org.springframework.security.web.context.HttpSessionSecurityContextRepository;
 import org.springframework.security.web.context.SecurityContextRepository;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
@@ -71,6 +73,16 @@ public class SecurityConfig {
                                             @Value("${security.enabled:true}") boolean enabled,
                                             @Value("${agents.app-token:}") String agentAppToken) throws Exception {
         http.cors(Customizer.withDefaults());
+        // Write security headers before the request is handled, on the request thread. By default they're
+        // written when the response commits, which for the SSE endpoints happens on the background thread
+        // sending the first event, racing the request thread on the same header map.
+        http.headers(headers -> headers.addObjectPostProcessor(new ObjectPostProcessor<HeaderWriterFilter>() {
+            @Override
+            public <O extends HeaderWriterFilter> O postProcess(O filter) {
+                filter.setShouldWriteHeadersEagerly(true);
+                return filter;
+            }
+        }));
         if (!enabled) {
             log.warn("security.enabled=false: the API is open to anyone who can reach it");
             return http.csrf(csrf -> csrf.disable())
