@@ -15,7 +15,7 @@ export interface SuggestionStreamHandlers {
 export function errorMessage(err: unknown, fallback = 'Something went wrong'): string {
   if (err instanceof HttpErrorResponse) {
     if (err.status === 0) {
-      return 'Cannot reach the backend at localhost:8080';
+      return 'Cannot reach the backend';
     }
     const body = err.error as { message?: string } | null;
     return body?.message ?? fallback;
@@ -26,7 +26,11 @@ export function errorMessage(err: unknown, fallback = 'Something went wrong'): s
 @Injectable({ providedIn: 'root' })
 export class ApiService {
   private readonly http = inject(HttpClient);
-  private readonly apiUrl = 'http://localhost:8080';
+  /**
+   * Same origin as the UI: `ng serve` (proxy.conf.json) and nginx (Docker) forward
+   * /api/* to the backend, so the app works from any host without configuration.
+   */
+  private readonly apiUrl = '/api';
 
   getAgents(): Observable<Agent[]> {
     return this.http.get<Agent[]>(`${this.apiUrl}/agents`);

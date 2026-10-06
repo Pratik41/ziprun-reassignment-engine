@@ -2,6 +2,8 @@ package com.ziprun.controller;
 
 import com.ziprun.routing.RoutingResult;
 import com.ziprun.routing.RoutingService;
+import com.ziprun.routing.gateway.LLMGateway;
+import com.ziprun.routing.gateway.ProviderCircuitBreaker;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
@@ -16,6 +18,7 @@ import java.util.Set;
  * GET /routing/strategy  - { "active": "ai", "available": ["ai", "rule-based"] }
  * PUT /routing/strategy  - body { "strategy": "rule-based" } switches with no restart
  * POST /routing/recommend - body { "description": "..." } top agents for a new order (nothing is saved)
+ * GET /routing/providers  - LLM providers in chain order with circuit-breaker state (CLOSED / OPEN / HALF_OPEN)
  */
 @RestController
 @RequestMapping("/routing")
@@ -24,9 +27,11 @@ public class RoutingController {
     private static final int MAX_RECOMMENDATIONS = 3;
 
     private final RoutingService routingService;
+    private final LLMGateway llmGateway;
 
-    public RoutingController(RoutingService routingService) {
+    public RoutingController(RoutingService routingService, LLMGateway llmGateway) {
         this.routingService = routingService;
+        this.llmGateway = llmGateway;
     }
 
     @GetMapping("/strategy")
@@ -50,6 +55,15 @@ public class RoutingController {
         String description = request == null ? null : request.description();
         List<RoutingResult> options = routingService.recommendForNewOrder(description, MAX_RECOMMENDATIONS);
         return new RecommendResponse(routingService.getActiveStrategyName(), options);
+    }
+
+    /**
+     * Which AI providers are being used right now. OPEN = paused after repeated
+     * failures until openUntil; calls skip straight to the next provider.
+     */
+    @GetMapping("/providers")
+    public List<ProviderCircuitBreaker.Status> providers() {
+        return llmGateway.getProviderStatus();
     }
 
     private StrategyResponse current() {

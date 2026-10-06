@@ -362,6 +362,7 @@ And it must answer with JSON only:
 | What went wrong | Kind | What happens |
 |---|---|---|
 | Provider has no API key | `NOT_CONFIGURED` | skip to the next provider |
+| Provider paused by its circuit breaker (see below) | (skipped) | next provider; `CIRCUIT_OPEN` if every provider is paused |
 | No answer in time | `TIMEOUT` | next provider |
 | Quota exhausted (HTTP 429) | `RATE_LIMITED` | next provider |
 | Other HTTP error (Gemini 503 "overloaded" is common) | `HTTP_ERROR` | next provider |
@@ -373,6 +374,25 @@ And it must answer with JSON only:
 Transport problems try the next provider. Content problems go straight to rule-based, because a second model's opinion doesn't fix something we can check ourselves. Whatever happens, ops gets a suggestion, and its `source` says honestly where it came from.
 
 Typical speed: Gemini 5–9 s, Groq under 1 s, rule-based instant.
+
+### Circuit breaker: don't wait on a provider that keeps failing
+
+Without it, a provider that hangs would cost **every** AI call its full 20-second timeout before the next provider is tried. Each provider has its own breaker:
+
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED
+    CLOSED --> CLOSED: success (failure count reset)
+    CLOSED --> OPEN: 2 failures in a row
+    OPEN --> HALF_OPEN: 5 minutes pass
+    HALF_OPEN --> CLOSED: trial call succeeds
+    HALF_OPEN --> OPEN: trial call fails
+```
+
+- **CLOSED:** used normally. **OPEN:** skipped; the call goes straight to the next provider. **HALF_OPEN:** the next call is a trial.
+- Only transport failures (timeout, 429, HTTP error, empty reply) count. A bad answer isn't the provider being down, so it doesn't pause it.
+- If every provider is paused, the AI strategy fails fast with `CIRCUIT_OPEN` and rule-based answers, labelled `rule-based (AI fallback: CIRCUIT_OPEN)`.
+- `GET /routing/providers` shows each provider's state, failure count, last error and when a pause ends. Tune with `LLM_CIRCUIT_FAILURE_THRESHOLD` and `LLM_CIRCUIT_COOLDOWN_SECONDS`.
 
 ---
 
@@ -545,7 +565,9 @@ Honest list of what isn't solved yet (most are on the Roadmap in the README):
 | You see | Likely cause | What to do |
 |---|---|---|
 | Every suggestion says `rule-based (AI fallback: NOT_CONFIGURED)` | No API key reached the backend | Set `GEMINI_API_KEY` / `GROQ_API_KEY` *before* starting it |
-| Many `ai:groq` tags | Gemini returned 503 "overloaded" or timed out; Groq stepped in | Normal; nothing to fix |
+| Many `ai:groq` tags | Gemini returned 503 "overloaded" or timed out; Groq stepped in | Normal; check `GET /routing/providers`: Gemini is probably paused and will be retried automatically |
+| `rule-based (AI fallback: CIRCUIT_OPEN)` | Every AI provider failed repeatedly and is paused | Check `GET /routing/providers` for the last error (bad key, quota); they're retried after the cooldown |
+| UI says "Can't reach the backend" | Backend not running, or the dev server was started without the `/api` proxy | Start the backend on 8080; run the UI with `npm start` / `ng serve` (it reads `proxy.conf.json`) |
 | A waiting order has no suggestion | No other agent is Available (its own agent is excluded) | Make an agent Available, or use **Keep with …** if its agent is back |
 | "X is the only AVAILABLE agent…" (409) | The last-available guardrail | Make another agent Available first |
 | Accept fails with "…isn't taking new orders" | The recommended agent went Busy/Offline since the suggestion was made | Wait for the refresh; a new suggestion replaces it |

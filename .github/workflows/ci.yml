@@ -58,6 +58,8 @@ jobs:
           curl -sf localhost:8080/agents | grep -q '"AGT-001"'
           curl -sf localhost:8080/routing/strategy
           curl -sf localhost:4200/queue | grep -q '<app-root>'
+          # the UI reaches the API through nginx on its own origin
+          curl -sf localhost:4200/api/agents | grep -q '"AGT-001"'
           echo "Backend and UI are up"
       - name: Container logs
         if: always()

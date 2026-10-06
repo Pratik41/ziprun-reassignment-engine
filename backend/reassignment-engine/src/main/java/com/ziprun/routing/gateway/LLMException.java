@@ -19,6 +19,8 @@ public class LLMException extends RuntimeException {
     public enum Kind {
         /** Provider in the chain has no API key / URL configured. */
         NOT_CONFIGURED,
+        /** Every configured provider failed repeatedly and is paused (circuit breaker open). */
+        CIRCUIT_OPEN,
         /** Connect or read timeout (llm.timeout-ms). */
         TIMEOUT,
         /** HTTP 429: quota or rate limit exhausted. */

@@ -27,7 +27,7 @@ This project automates that recovery. When an agent goes offline, the system fin
 - **Automatic re-planning.** Changing an agent's status triggers a background re-plan. Offline strands their orders; Busy or Offline withdraws suggestions that point at them; becoming Available re-balances everything waiting.
 - **Automatic offline detection:** agents' phone apps send a heartbeat (`POST /agents/{id}/heartbeat`). If it stops for 60 seconds, the agent is marked Offline and their orders are re-planned, with nobody clicking anything. The Fleet page can simulate an agent's app.
 - **Two routing strategies, switchable at runtime:** `ai` (Gemini, with Groq as backup) and `rule-based` (least effective load). The choice is saved and survives restarts. New strategies plug in as a single class.
-- **AI you can trust:** every recommended agent is checked against the real roster, and any AI failure (timeout, quota, bad JSON, made-up agent) falls back to rule-based. Each suggestion is labelled with what actually produced it, e.g. `ai:gemini` or `rule-based (AI fallback: TIMEOUT)`. Confidence is capped when the roster is thin, so no strategy can claim certainty it doesn't have.
+- **AI you can trust:** every recommended agent is checked against the real roster, and any AI failure (timeout, quota, bad JSON, made-up agent) falls back to rule-based. Each suggestion is labelled with what actually produced it, e.g. `ai:gemini` or `rule-based (AI fallback: TIMEOUT)`. A provider that keeps failing is paused for 5 minutes (circuit breaker), so one slow provider doesn't add a 20-second wait to every AI call. Confidence is capped when the roster is thin, so no strategy can claim certainty it doesn't have.
 - **Insights:** acceptance rate, confidence and response time per strategy (AI vs rule-based vs fallback), the AI fallback rate, and an activity log of everything ops and the system did.
 - **Recommended agent for new orders:** the New order dialog asks the active strategy for the top 3 Available agents (lightest effective load first; the AI also weighs the description), pre-selects the best one and shows why. Ops can still pick anyone; Insights tracks how often the recommended agent is used.
 - **Load balancing:** routing counts active orders *plus* suggestions already queued, so a batch of stranded orders is spread across agents instead of piling onto one.
@@ -51,6 +51,8 @@ docker compose up --build
 
 Open http://localhost:4200 (the backend is on http://localhost:8080). The database lives in a Docker volume, so it survives restarts; `docker compose down -v` resets it.
 
+The UI calls the API on its own address under `/api` (nginx forwards it to the backend), so it also works when opened from another machine or a phone. To point the UI container at a backend somewhere else, set `BACKEND_URL` on the `frontend` service (default `http://backend:8080`).
+
 ### Without Docker
 
 **Prerequisites:** Java 17+, Maven 3.8+, Node 18+.
@@ -69,6 +71,8 @@ npm start
 ```
 
 On Windows PowerShell, use `$env:GEMINI_API_KEY="..."` instead of `export`, or run `RUN_PROJECT.bat` and `RUN_FRONTEND.bat`.
+
+The dev server forwards `/api/*` to the backend on port 8080 (`proxy.conf.json`), so there's no backend address to configure. To open the console from your phone on the same Wi-Fi, start it with `npx ng serve --host 0.0.0.0` and browse to `http://<your-computer's-IP>:4200`.
 
 On first start an empty database is filled from `data.sql`: 5 agents and 8 orders. Priya Sharma (AGT-001) carries ORD-001, ORD-002 and ORD-008, and Rahul (AGT-002) and Kiran (AGT-004) are the only Available agents. The H2 database lives in `backend/reassignment-engine/data/`; delete that folder to start fresh.
 
@@ -125,6 +129,7 @@ curl -X PATCH localhost:8080/suggestions/SUGG-XXXX -H 'Content-Type: application
 | `GET` | `/suggestions?status=` | `PENDING`, `ACCEPTED`, `REJECTED`, `EXPIRED` (withdrawn by the system) |
 | `PATCH` | `/suggestions/{id}` | `{status: ACCEPTED \| REJECTED}`; accept reassigns the order atomically |
 | `GET` / `PUT` | `/routing/strategy` | view / switch the active strategy at runtime `{strategy}` (saved, survives restarts) |
+| `GET` | `/routing/providers` | AI providers in order with circuit-breaker state: `CLOSED` (in use), `OPEN` (paused until `openUntil`), `HALF_OPEN` (next call is a trial) |
 | `POST` | `/routing/recommend` | `{description?}` → top 3 Available agents for a new order from the active strategy, best first; nothing is saved |
 | `GET` | `/metrics` | suggestion outcomes per source (AI / rule-based / fallback): acceptance rate, confidence, response time; how often new orders went to the recommended agent |
 | `GET` | `/activity?limit=50` | activity log, newest first: who did what, when (`ops` or `system`) |
@@ -144,6 +149,8 @@ All settings live in `application.properties` and can be overridden with environ
 | `GEMINI_MODEL` | `gemini-3.6-flash` | |
 | `GROQ_API_KEY` / `GROQ_MODEL` | none / `openai/gpt-oss-20b` | |
 | `LLM_TIMEOUT_MS` | `20000` | per-provider connect/read timeout |
+| `LLM_CIRCUIT_FAILURE_THRESHOLD` | `2` | failures in a row before a provider is paused (circuit breaker) |
+| `LLM_CIRCUIT_COOLDOWN_SECONDS` | `300` | how long a paused provider is skipped; then one trial call decides if it's back |
 
 ## How it works
 
@@ -179,8 +186,8 @@ cd backend/reassignment-engine
 mvn test
 ```
 
-56 tests, run on every push by GitHub Actions (which also builds the Docker images and smoke-tests the running stack). They need no API keys: they use an in-memory database and a test-only fake LLM.
-- **Unit:** rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain, incremental reasoning extraction, saved strategy on restart, thin-roster confidence cap.
+59 tests, run on every push by GitHub Actions (which also builds the Docker images and smoke-tests the running stack). They need no API keys: they use an in-memory database and a test-only fake LLM.
+- **Unit:** rule-based ranking and confidence, AI validation and every fallback path, response parsing, prompt differences, provider chain and circuit breaker, incremental reasoning extraction, saved strategy on restart, thin-roster confidence cap.
 - **End-to-end** (HTTP + background loop + H2): offline → spread suggestions → accept → loads updated; idempotent re-trigger; sibling suggestions rejected on accept; runtime strategy switch; stale suggestions withdrawn when their agent goes busy or offline; re-balance when an agent becomes available; recommendation refused if the agent went offline mid-routing; keep with original agent; manual reassign; last Available agent protected; structured errors; async fallback when the AI makes up an agent; SSE streaming, including fallback; heartbeat auto-offline (and manual override); activity log and metrics; new-order recommendations (lighter agent first, nothing saved, followed/overridden recorded).
 
 ## Roadmap
