@@ -1,5 +1,6 @@
 package com.ziprun.domain;
 
+import com.ziprun.service.live.ChangeTracker;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -15,6 +16,7 @@ import java.time.LocalDateTime;
  *    the fleet default, agents.default-max-capacity). Both editable from the Fleet page.
  */
 @Entity
+@EntityListeners(ChangeTracker.class) // pushes "data changed" to open consoles (GET /events)
 @Table(name = "agents")
 public class Agent {
 

@@ -1,5 +1,6 @@
 package com.ziprun.domain;
 
+import com.ziprun.service.live.ChangeTracker;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -18,6 +19,7 @@ import java.time.LocalDateTime;
  * - Decided by ops in the UI (PATCH /suggestions/{id}: accept / reject)
  */
 @Entity
+@EntityListeners(ChangeTracker.class) // pushes "data changed" to open consoles (GET /events)
 @Table(name = "reassignment_suggestions")
 public class ReassignmentSuggestion {
 

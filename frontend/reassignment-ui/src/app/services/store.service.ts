@@ -4,9 +4,12 @@ import { Agent, AppConfig, Order, StrategyInfo, Suggestion } from '../models';
 import { ApiService } from './api.service';
 
 /**
- * Single source of truth for the UI. Polls the backend every few seconds so
- * suggestions created by the background re-planning loop appear without a
- * click, and exposes derived views as signals.
+ * Single source of truth for the UI, exposing derived views as signals.
+ *
+ * Stays current through the backend's live stream (GET /events): every committed
+ * change pushes an event and the store re-reads at once, so suggestions created by
+ * the background re-planning loop appear immediately. If the stream drops, it
+ * falls back to polling every few seconds until it reconnects.
  */
 /** Soonest deadline first; orders without one last. */
 function byDeadline(a: Order, b: Order): number {
@@ -18,11 +21,16 @@ function byDeadline(a: Order, b: Order): number {
 
 @Injectable({ providedIn: 'root' })
 export class StoreService implements OnDestroy {
+  /** Polling interval while the live stream is down. */
   static readonly POLL_MS = 3000;
+  /** Safety re-read while the live stream is up (it should never be needed). */
+  static readonly LIVE_RESYNC_MS = 60000;
 
   private readonly api = inject(ApiService);
   private readonly timer: ReturnType<typeof setInterval>;
+  private events: EventSource | null = null;
   private inFlight = false;
+  private refreshAgain = false;
 
   readonly agents = signal<Agent[]>([]);
   readonly orders = signal<Order[]>([]);
@@ -32,6 +40,10 @@ export class StoreService implements OnDestroy {
   readonly config = signal<AppConfig | null>(null);
   readonly loaded = signal(false);
   readonly connection = signal<'ok' | 'error'>('ok');
+  /** True while the live stream (GET /events) is connected. */
+  readonly live = signal(false);
+  /** Increments on every pushed change, for pages that load their own data (Insights). */
+  readonly changes = signal(0);
   readonly lastUpdated = signal<Date | null>(null);
 
   readonly agentById = computed(() => new Map(this.agents().map(a => [a.id, a])));
@@ -89,15 +101,41 @@ export class StoreService implements OnDestroy {
 
   constructor() {
     this.refresh();
-    this.timer = setInterval(() => this.refresh(), StoreService.POLL_MS);
+    this.connectLive();
+    this.timer = setInterval(() => {
+      const last = this.lastUpdated()?.getTime() ?? 0;
+      if (!this.live() || Date.now() - last > StoreService.LIVE_RESYNC_MS) {
+        this.refresh();
+      }
+    }, StoreService.POLL_MS);
   }
 
   ngOnDestroy(): void {
     clearInterval(this.timer);
+    this.events?.close();
+  }
+
+  /** EventSource reconnects by itself after an error; we re-read on every (re)connect to catch up. */
+  private connectLive(): void {
+    if (typeof EventSource === 'undefined') {
+      return;
+    }
+    this.events = this.api.openEvents();
+    this.events.addEventListener('hello', () => {
+      this.live.set(true);
+      this.refresh();
+    });
+    this.events.addEventListener('change', () => {
+      this.changes.update(n => n + 1);
+      this.refresh();
+    });
+    this.events.onerror = () => this.live.set(false);
   }
 
   refresh(): void {
     if (this.inFlight) {
+      // a change arrived mid-read: read again afterwards so nothing is missed
+      this.refreshAgain = true;
       return;
     }
     if (!this.config()) {
@@ -119,12 +157,21 @@ export class StoreService implements OnDestroy {
         this.loaded.set(true);
         this.lastUpdated.set(new Date());
         this.inFlight = false;
+        this.refreshPending();
       },
       error: () => {
         this.connection.set('error');
         this.inFlight = false;
+        this.refreshPending();
       },
     });
+  }
+
+  private refreshPending(): void {
+    if (this.refreshAgain) {
+      this.refreshAgain = false;
+      this.refresh();
+    }
   }
 
   agentName(id: string): string {

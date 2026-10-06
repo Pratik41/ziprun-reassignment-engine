@@ -1,6 +1,7 @@
 package com.ziprun.domain;
 
 import com.ziprun.exception.InvalidStateException;
+import com.ziprun.service.live.ChangeTracker;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -15,6 +16,7 @@ import java.time.LocalDateTime;
  * 4. createdAt tracks when order was assigned
  */
 @Entity
+@EntityListeners(ChangeTracker.class) // pushes "data changed" to open consoles (GET /events)
 @Table(name = "orders")
 public class Order {
 

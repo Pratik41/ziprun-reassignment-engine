@@ -1,5 +1,6 @@
 package com.ziprun.domain;
 
+import com.ziprun.service.live.ChangeTracker;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -8,6 +9,7 @@ import java.time.LocalDateTime;
  * (e.g. the active routing strategy chosen in the UI).
  */
 @Entity
+@EntityListeners(ChangeTracker.class) // pushes "data changed" to open consoles (GET /events)
 @Table(name = "app_settings")
 public class AppSetting {
 

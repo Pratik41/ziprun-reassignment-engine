@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, OnDestroy, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, OnDestroy, computed, effect, inject, signal, untracked } from '@angular/core';
 import { forkJoin } from 'rxjs';
 import { Activity, MetricsSummary, SourceStats } from '../models';
 import { percent, timeAgo } from '../labels';
 import { ApiService } from '../services/api.service';
+import { StoreService } from '../services/store.service';
 import { IconComponent } from '../ui/icon.component';
 
 const ACTIVITY_STYLE: Record<string, { icon: string; tone: string }> = {
@@ -152,7 +153,14 @@ const SOURCE_ICON: Record<string, string> = { ai: 'sparkles', 'rule-based': 'sca
 })
 export class InsightsPage implements OnDestroy {
   private readonly api = inject(ApiService);
-  private readonly timer = setInterval(() => this.load(), 5000);
+  private readonly store = inject(StoreService);
+  /** Re-load when the store hears of a change (live stream), and every 30 s as a safety net. */
+  private readonly timer = setInterval(() => this.load(), 30000);
+  private readonly onChange = effect(() => {
+    if (this.store.changes() > 0) {
+      untracked(() => this.load());
+    }
+  });
 
   readonly metrics = signal<MetricsSummary | null>(null);
   readonly activity = signal<Activity[]>([]);

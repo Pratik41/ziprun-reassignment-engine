@@ -33,7 +33,7 @@
     <div class="sidebar-foot">
       <div class="conn" [class.down]="store.connection() === 'error'">
         <span class="pulse"></span>
-        {{ store.connection() === 'ok' ? 'Live · updates every 3s' : 'Backend unreachable' }}
+        {{ store.connection() === 'error' ? 'Backend unreachable' : store.live() ? 'Live · instant updates' : 'Updating every 3s' }}
       </div>
       <button class="theme-btn" (click)="theme.toggle()">
         <app-icon [name]="theme.isDark() ? 'sun' : 'moon'" />

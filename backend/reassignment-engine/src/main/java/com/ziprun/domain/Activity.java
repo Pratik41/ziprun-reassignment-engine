@@ -1,5 +1,6 @@
 package com.ziprun.domain;
 
+import com.ziprun.service.live.ChangeTracker;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -10,6 +11,7 @@ import java.time.LocalDateTime;
  * activity types can be added without a schema migration.
  */
 @Entity
+@EntityListeners(ChangeTracker.class) // pushes "data changed" to open consoles (GET /events)
 @Table(name = "activity_log", indexes = @Index(name = "idx_activity_at", columnList = "at"))
 public class Activity {
 

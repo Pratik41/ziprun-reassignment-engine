@@ -54,6 +54,11 @@ export class ApiService {
     return this.http.post<RecommendResponse>(`${this.apiUrl}/routing/recommend`, { description, pickupZone, dropoffZone });
   }
 
+  /** Live change notifications (Server-Sent Events). */
+  openEvents(): EventSource {
+    return new EventSource(`${this.apiUrl}/events`, { withCredentials: true });
+  }
+
   getConfig(): Observable<AppConfig> {
     return this.http.get<AppConfig>(`${this.apiUrl}/config`);
   }
