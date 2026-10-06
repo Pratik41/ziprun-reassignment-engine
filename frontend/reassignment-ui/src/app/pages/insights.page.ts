@@ -38,7 +38,7 @@ const SOURCE_ICON: Record<string, string> = { ai: 'sparkles', 'rule-based': 'sca
           <p class="page-sub">How each routing strategy performs with real decisions, and a timeline of everything the
             system and ops did.</p>
         </div>
-        <span class="subtle small">Refreshes every 5s</span>
+        <span class="subtle small">{{ store.live() ? 'Updates live' : 'Updates every 30s' }}</span>
       </div>
 
       <div class="kpis">
@@ -153,7 +153,7 @@ const SOURCE_ICON: Record<string, string> = { ai: 'sparkles', 'rule-based': 'sca
 })
 export class InsightsPage implements OnDestroy {
   private readonly api = inject(ApiService);
-  private readonly store = inject(StoreService);
+  readonly store = inject(StoreService);
   /** Re-load when the store hears of a change (live stream), and every 30 s as a safety net. */
   private readonly timer = setInterval(() => this.load(), 30000);
   private readonly onChange = effect(() => {

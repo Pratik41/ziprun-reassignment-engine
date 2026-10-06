@@ -9,11 +9,28 @@ This project automates that recovery. When an agent goes offline, or an order is
 ![ZipRun ops console: reassignment queue with KPIs, AI/rule-based suggestions and the fleet panel](docs/screenshots/queue.png)
 
 <details>
-<summary>More screens: dark mode, Fleet, Orders</summary>
+<summary>More screens: New order recommendations, Insights, Fleet, Orders, dark mode, phone, sign-in</summary>
 
-![Queue in dark mode](docs/screenshots/queue-dark.png)
+**New order:** the active strategy recommends agents by load, capacity and distance to the pickup zone (here everyone is at capacity, so it says so and confidence is capped)
+![New order dialog with recommended agents](docs/screenshots/new-order.png)
+
+**Insights:** AI vs rule-based acceptance, fallback rate, response time, and the activity log
+![Insights page](docs/screenshots/insights.png)
+
+**Fleet:** load against capacity (red = full), zone and capacity per agent
 ![Fleet page](docs/screenshots/fleet.png)
+
+**Orders:** every order with its route and deadline
 ![Orders page](docs/screenshots/orders.png)
+
+**Dark mode**
+![Queue in dark mode](docs/screenshots/queue-dark.png)
+
+**Phone:** bottom tab bar
+<img src="docs/screenshots/phone.png" alt="Queue on a phone" width="300">
+
+**Sign-in**
+![Sign-in page](docs/screenshots/login.png)
 
 </details>
 
