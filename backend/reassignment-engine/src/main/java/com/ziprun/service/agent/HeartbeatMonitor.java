@@ -6,6 +6,7 @@ import com.ziprun.repository.AgentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -45,6 +46,9 @@ public class HeartbeatMonitor {
                 EnumSet.of(AgentStatus.AVAILABLE, AgentStatus.BUSY), cutoff)) {
             try {
                 agentService.markOfflineIfSilentSince(agent.getId(), cutoff);
+            } catch (ObjectOptimisticLockingFailureException e) {
+                // a heartbeat or a status change landed at the same moment: look again on the next tick
+                log.info("Agent {} changed while checking heartbeats; re-checking next time", agent.getId());
             } catch (Exception e) {
                 log.error("Heartbeat check failed for agent {}", agent.getId(), e);
             }

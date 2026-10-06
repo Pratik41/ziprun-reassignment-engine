@@ -17,8 +17,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.core.task.TaskExecutor;
+import com.ziprun.config.StreamWorkers;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
@@ -55,18 +54,18 @@ public class OrderController {
     private final OrderService orderService;
     private final SuggestionService suggestionService;
     private final RoutingService routingService;
-    private final TaskExecutor taskExecutor;
+    private final StreamWorkers streamWorkers;
 
     public OrderController(
             OrderService orderService,
             SuggestionService suggestionService,
             RoutingService routingService,
-            @Qualifier("applicationTaskExecutor") TaskExecutor taskExecutor
+            StreamWorkers streamWorkers
     ) {
         this.orderService = orderService;
         this.suggestionService = suggestionService;
         this.routingService = routingService;
-        this.taskExecutor = taskExecutor;
+        this.streamWorkers = streamWorkers;
     }
 
     /**
@@ -137,7 +136,8 @@ public class OrderController {
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MS);
         SseSender sse = new SseSender(emitter);
 
-        taskExecutor.execute(() -> {
+        // its own pool, so streams never wait behind the background re-planning loop
+        streamWorkers.runStream(() -> {
             try {
                 sse.send("start", Map.of("orderId", id, "strategy", routingService.getActiveStrategyName()));
                 ReasoningListener listener = new ReasoningListener() {

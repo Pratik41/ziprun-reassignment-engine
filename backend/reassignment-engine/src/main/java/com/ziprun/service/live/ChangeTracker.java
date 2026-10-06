@@ -33,10 +33,17 @@ public class ChangeTracker {
     @PostUpdate
     @PostRemove
     public void onWrite(Object entity) {
+        afterCommit(topicOf(entity));
+    }
+
+    /**
+     * For bulk UPDATE queries, which bypass entity listeners: notify consoles once the
+     * current transaction commits (or right away outside one).
+     */
+    public void afterCommit(String topic) {
         if (live == null) {
             return;
         }
-        String topic = topicOf(entity);
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override

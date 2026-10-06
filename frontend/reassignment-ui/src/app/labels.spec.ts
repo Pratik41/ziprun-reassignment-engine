@@ -29,6 +29,12 @@ describe('labels', () => {
     it('accepts the backend\'s microsecond timestamps', () => {
       expect(deadlineState('2026-10-06T12:10:00.123456', now, 30)!.kind).toBe('risk');
     });
+
+    it('honours the offset, so a server in another time zone shows the right deadline', () => {
+      // the same instant written by a UTC server: 10 minutes after `now`, wherever the browser is
+      const due = new Date(now.getTime() + 10 * 60000).toISOString().replace('Z', '123Z');
+      expect(deadlineState(due, now, 30)).toEqual(jasmine.objectContaining({ kind: 'risk', label: 'Due in 10m' }));
+    });
   });
 
   describe('sourceInfo', () => {

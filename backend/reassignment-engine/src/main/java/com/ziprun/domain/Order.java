@@ -2,6 +2,7 @@ package com.ziprun.domain;
 
 import com.ziprun.exception.InvalidStateException;
 import com.ziprun.service.live.ChangeTracker;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 
@@ -22,6 +23,16 @@ public class Order {
 
     @Id
     private String id;
+
+    /**
+     * Optimistic locking: every update checks the row still has the version it was read with.
+     * Two transactions changing the same row at once (a heartbeat and a status change, two
+     * accepts loading the same agent's order count) can't silently overwrite each other:
+     * the second gets a conflict (409) instead of a lost update.
+     */
+    @Version
+    @JsonIgnore
+    private Long version;
 
     @Column(nullable = false, length = 500)
     private String description;

@@ -72,12 +72,16 @@ export function avatarHue(id: string): number {
   return (h * 47) % 360;
 }
 
-/** Backend timestamps are local date-times without a zone, e.g. "2026-10-05T01:00:21.634866". */
+/**
+ * Backend timestamps carry their UTC offset, e.g. "2026-10-05T01:00:21.634866+05:30" or "...Z",
+ * so they convert to the browser's own time zone. Fractions are cut to milliseconds (all
+ * browsers parse those); a value without an offset is read as local time.
+ */
 export function parseTime(iso: string | null): Date | null {
   if (!iso) {
     return null;
   }
-  const d = new Date(iso.slice(0, 23));
+  const d = new Date(iso.replace(/(\.\d{3})\d+/, '$1'));
   return isNaN(d.getTime()) ? null : d;
 }
 

@@ -4,6 +4,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
+import org.springframework.core.task.TaskRejectedException;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -41,6 +43,21 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidStateException.class)
     public ResponseEntity<ApiError> conflict(InvalidStateException e, HttpServletRequest req) {
         return build(HttpStatus.CONFLICT, e.getMessage(), req, null);
+    }
+
+    /** Two changes to the same row at once (@Version): the later one is refused, nothing is half-applied. */
+    @ExceptionHandler(ObjectOptimisticLockingFailureException.class)
+    public ResponseEntity<ApiError> concurrentChange(ObjectOptimisticLockingFailureException e, HttpServletRequest req) {
+        log.info("Concurrent update refused on {}: {}", req.getRequestURI(), e.getMessage());
+        return build(HttpStatus.CONFLICT, "Someone else changed this at the same moment; please try again.",
+            req, List.of());
+    }
+
+    /** Every "Get suggestion" stream thread is busy (see StreamWorkers). */
+    @ExceptionHandler(TaskRejectedException.class)
+    public ResponseEntity<ApiError> busy(TaskRejectedException e, HttpServletRequest req) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, "Too many suggestions are being worked out right now; try again in a moment.",
+            req, List.of());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

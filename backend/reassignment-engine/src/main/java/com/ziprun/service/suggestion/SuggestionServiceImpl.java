@@ -15,6 +15,7 @@ import com.ziprun.repository.OrderRepository;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
 import com.ziprun.routing.RoutingResult;
 import com.ziprun.service.activity.ActivityService;
+import com.ziprun.service.live.ChangeTracker;
 import com.ziprun.service.order.OrderService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,19 +47,22 @@ public class SuggestionServiceImpl implements SuggestionService {
     private final AgentRepository agentRepository;
     private final OrderService orderService;
     private final ActivityService activity;
+    private final ChangeTracker changes;
 
     public SuggestionServiceImpl(
             ReassignmentSuggestionRepository suggestionRepository,
             OrderRepository orderRepository,
             AgentRepository agentRepository,
             OrderService orderService,
-            ActivityService activity
+            ActivityService activity,
+            ChangeTracker changes
     ) {
         this.suggestionRepository = suggestionRepository;
         this.orderRepository = orderRepository;
         this.agentRepository = agentRepository;
         this.orderService = orderService;
         this.activity = activity;
+        this.changes = changes;
     }
 
     @Override
@@ -211,16 +215,13 @@ public class SuggestionServiceImpl implements SuggestionService {
 
     @Override
     public List<String> expirePendingRecommending(String agentId) {
-        LocalDateTime now = LocalDateTime.now();
         List<ReassignmentSuggestion> stale = suggestionRepository.findByRecommendedAgentIdAndStatus(agentId, SuggestionStatus.PENDING);
-        stale.forEach(s -> {
-            s.setStatus(SuggestionStatus.EXPIRED);
-            s.setDecidedAt(now);
-            log.info("Suggestion {} EXPIRED: recommended agent {} is no longer AVAILABLE (order {})", s.getId(), agentId, s.getOrderId());
-        });
-        if (!stale.isEmpty()) {
+        int expired = suggestionRepository.expirePendingRecommending(agentId, LocalDateTime.now());
+        if (expired > 0) {
+            changes.afterCommit("suggestions");
+            log.info("{} suggestion(s) EXPIRED: recommended agent {} is no longer AVAILABLE", expired, agentId);
             activity.record(Activity.Type.SUGGESTIONS_WITHDRAWN, Activity.Actor.SYSTEM,
-                String.format("%d suggestion(s) withdrawn: %s is no longer available", stale.size(), name(agentId)),
+                String.format("%d suggestion(s) withdrawn: %s is no longer available", expired, name(agentId)),
                 null, agentId, null);
         }
         return stale.stream().map(ReassignmentSuggestion::getOrderId).distinct().toList();
@@ -270,13 +271,11 @@ public class SuggestionServiceImpl implements SuggestionService {
 
     /** @return how many suggestions were expired */
     private int expirePendingFor(String orderId) {
-        LocalDateTime now = LocalDateTime.now();
-        List<ReassignmentSuggestion> open = suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING);
-        open.forEach(s -> {
-            s.setStatus(SuggestionStatus.EXPIRED);
-            s.setDecidedAt(now);
-        });
-        return open.size();
+        int expired = suggestionRepository.expirePendingForOrder(orderId, LocalDateTime.now());
+        if (expired > 0) {
+            changes.afterCommit("suggestions");
+        }
+        return expired;
     }
 
     private String name(String agentId) {

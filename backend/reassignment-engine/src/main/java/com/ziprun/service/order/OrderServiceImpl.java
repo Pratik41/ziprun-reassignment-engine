@@ -8,12 +8,12 @@ import com.ziprun.domain.OrderStatus;
 import com.ziprun.exception.InvalidStateException;
 import com.ziprun.exception.NotFoundException;
 import com.ziprun.repository.AgentRepository;
-import com.ziprun.domain.SuggestionStatus;
 import com.ziprun.repository.OrderRepository;
 import com.ziprun.repository.ReassignmentSuggestionRepository;
 import com.ziprun.routing.Zones;
 import org.springframework.beans.factory.annotation.Value;
 import com.ziprun.service.activity.ActivityService;
+import com.ziprun.service.live.ChangeTracker;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -44,15 +44,18 @@ public class OrderServiceImpl implements OrderService {
     private final ReassignmentSuggestionRepository suggestionRepository;
     private final ActivityService activity;
     private final int defaultSlaMinutes;
+    private final ChangeTracker changes;
 
     public OrderServiceImpl(OrderRepository orderRepository, AgentRepository agentRepository,
                             ReassignmentSuggestionRepository suggestionRepository, ActivityService activity,
+                            ChangeTracker changes,
                             @Value("${orders.default-sla-minutes:120}") int defaultSlaMinutes) {
         this.orderRepository = orderRepository;
         this.agentRepository = agentRepository;
         this.suggestionRepository = suggestionRepository;
         this.activity = activity;
         this.defaultSlaMinutes = defaultSlaMinutes;
+        this.changes = changes;
     }
 
     @Override
@@ -184,11 +187,9 @@ public class OrderServiceImpl implements OrderService {
             Agent agent = getAgent(order.getAssignedAgentId());
             agent.releaseOrder();
             // Nothing left to decide: withdraw any open suggestion for it (e.g. an SLA one)
-            LocalDateTime now = LocalDateTime.now();
-            suggestionRepository.findByOrderIdAndStatus(orderId, SuggestionStatus.PENDING).forEach(s -> {
-                s.setStatus(SuggestionStatus.EXPIRED);
-                s.setDecidedAt(now);
-            });
+            if (suggestionRepository.expirePendingForOrder(orderId, LocalDateTime.now()) > 0) {
+                changes.afterCommit("suggestions");
+            }
             activity.record(Activity.Type.ORDER_DELIVERED, Activity.Actor.OPS,
                 String.format("%s delivered by %s", orderId, agent.getName()), orderId, agent.getId(), null);
         }
